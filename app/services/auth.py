@@ -2,27 +2,42 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User, RefreshToken
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# =============================================
+# Password hashing — using bcrypt directly
+# (passlib has compatibility issues with bcrypt 4.1+)
+# =============================================
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt()
+    ).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its bcrypt hash."""
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8"),
+        )
+    except Exception:
+        return False
 
+
+# =============================================
+# Local authentication
+# =============================================
 
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> Optional[User]:
     """Authenticate a user by email and password. Returns User or None."""
@@ -56,6 +71,10 @@ async def create_local_user(
     await db.refresh(user)
     return user
 
+
+# =============================================
+# JWT tokens
+# =============================================
 
 def create_access_token(user_id: str) -> tuple[str, datetime]:
     """Create a short-lived JWT access token. Returns (token, expires_at)."""
@@ -141,7 +160,6 @@ async def get_or_create_user(db: AsyncSession, email: str, display_name: str = N
     user = result.scalar_one_or_none()
 
     if user:
-        # Update profile info from Google if changed
         if display_name and user.display_name != display_name:
             user.display_name = display_name
         if avatar_url and user.avatar_url != avatar_url:
