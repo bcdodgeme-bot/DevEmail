@@ -54,3 +54,6 @@ export function getInitials(name) {
   }
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
+
+// Alias for NavRail compatibility
+export const getAvatarGradient = getAvatarColor;
