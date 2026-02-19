@@ -39,7 +39,7 @@ const processQueue = (error, token = null) => {
 client.interceptors.request.use(
   (config) => {
     const state = store.getState();
-    const token = state.auth.accessToken;
+    const token = state.auth.accessToken || localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
