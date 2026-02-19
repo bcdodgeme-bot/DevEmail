@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 import json
 
 
@@ -16,15 +16,15 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Google OAuth
-    GOOGLE_CLIENT_ID: str
-    GOOGLE_CLIENT_SECRET: str
-    GOOGLE_REDIRECT_URI: str = "https://app.damnitcarl.dev/api/auth/google/callback"
+    # Google OAuth (optional — app boots without these, OAuth just won't work)
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REDIRECT_URI: str = "https://devemail-production.up.railway.app/api/auth/google/callback"
 
     # App
     APP_NAME: str = "Unified Inbox"
-    APP_URL: str = "https://app.damnitcarl.dev"
-    CORS_ORIGINS: str = '["https://app.damnitcarl.dev","http://localhost:3000"]'
+    APP_URL: str = "https://devemail-production.up.railway.app"
+    CORS_ORIGINS: str = '["https://devemail-production.up.railway.app","http://localhost:3000"]'
 
     @property
     def cors_origins_list(self) -> List[str]:
