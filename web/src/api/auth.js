@@ -3,8 +3,24 @@ import client from './client';
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const authAPI = {
-  // Get the Google OAuth login redirect URL
-  getLoginUrl() {
+  // Local auth — email + password login
+  async login(email, password) {
+    const { data } = await client.post('/auth/login', { email, password });
+    return data;
+  },
+
+  // Local auth — register new account
+  async register(email, password, displayName = null) {
+    const { data } = await client.post('/auth/register', {
+      email,
+      password,
+      display_name: displayName,
+    });
+    return data;
+  },
+
+  // Google OAuth — link a Gmail account (requires auth)
+  getGoogleLinkUrl() {
     return `${API_BASE}/auth/google/login`;
   },
 

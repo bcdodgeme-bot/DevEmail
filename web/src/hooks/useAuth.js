@@ -3,27 +3,28 @@ import {
   selectIsAuthenticated,
   selectUser,
   selectAuthLoading,
-  setCredentials,
+  selectAuthError,
+  loginUser,
+  registerUser,
   logout,
   logoutAll,
   fetchCurrentUser,
+  clearError,
 } from '../store/authSlice';
-import { authAPI } from '../api/auth';
 
 export function useAuth() {
   const dispatch = useDispatch();
   const isAuthenticated = useSelector(selectIsAuthenticated);
   const user = useSelector(selectUser);
   const isLoading = useSelector(selectAuthLoading);
+  const error = useSelector(selectAuthError);
 
-  const login = () => {
-    // Redirect to Google OAuth
-    window.location.href = authAPI.getLoginUrl();
+  const login = (email, password) => {
+    return dispatch(loginUser({ email, password }));
   };
 
-  const handleOAuthCallback = (params) => {
-    // Called from the OAuth callback route with token data
-    dispatch(setCredentials(params));
+  const register = (email, password, displayName) => {
+    return dispatch(registerUser({ email, password, displayName }));
   };
 
   const handleLogout = () => {
@@ -38,14 +39,20 @@ export function useAuth() {
     dispatch(fetchCurrentUser());
   };
 
+  const dismissError = () => {
+    dispatch(clearError());
+  };
+
   return {
     isAuthenticated,
     user,
     isLoading,
+    error,
     login,
-    handleOAuthCallback,
+    register,
     logout: handleLogout,
     logoutAll: handleLogoutAll,
     refreshUser,
+    dismissError,
   };
 }

@@ -3,11 +3,58 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import jwt, JWTError
+from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.user import User, RefreshToken
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> Optional[User]:
+    """Authenticate a user by email and password. Returns User or None."""
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return None
+    if not user.password_hash:
+        return None
+    if not verify_password(password, user.password_hash):
+        return None
+
+    return user
+
+
+async def create_local_user(
+    db: AsyncSession,
+    email: str,
+    password: str,
+    display_name: str = None,
+) -> User:
+    """Create a new user with a local password."""
+    user = User(
+        email=email,
+        password_hash=hash_password(password),
+        display_name=display_name or email.split("@")[0],
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 def create_access_token(user_id: str) -> tuple[str, datetime]:
@@ -89,7 +136,7 @@ def decode_access_token(token: str) -> Optional[dict]:
 
 
 async def get_or_create_user(db: AsyncSession, email: str, display_name: str = None, avatar_url: str = None) -> User:
-    """Get existing user by email or create a new one."""
+    """Get existing user by email or create a new one (used by Google OAuth)."""
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 

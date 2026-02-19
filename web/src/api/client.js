@@ -1,8 +1,16 @@
 import axios from 'axios';
 import { store } from '../store';
-import { updateTokens, clearCredentials } from '../store/authSlice';
+import { updateTokens } from '../store/authSlice';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
+// Clear auth and redirect to login
+function clearAuthState() {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('user');
+  window.location.href = '/login';
+}
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -50,13 +58,11 @@ client.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       // Don't try to refresh if the refresh endpoint itself failed
       if (originalRequest.url?.includes('/auth/refresh')) {
-        store.dispatch(clearCredentials());
-        window.location.href = '/login';
+        clearAuthState();
         return Promise.reject(error);
       }
 
       if (isRefreshing) {
-        // Queue this request until refresh completes
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
         })
@@ -74,8 +80,7 @@ client.interceptors.response.use(
       const refreshToken = state.auth.refreshToken;
 
       if (!refreshToken) {
-        store.dispatch(clearCredentials());
-        window.location.href = '/login';
+        clearAuthState();
         return Promise.reject(error);
       }
 
@@ -93,8 +98,7 @@ client.interceptors.response.use(
         return client(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError, null);
-        store.dispatch(clearCredentials());
-        window.location.href = '/login';
+        clearAuthState();
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
