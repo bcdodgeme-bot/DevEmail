@@ -10,9 +10,6 @@ import AppShell from './components/layout/AppShell';
 import Login from './pages/Login';
 import OAuthCallback from './pages/OAuthCallback';
 import Inbox from './pages/Inbox';
-import Sent from './pages/Sent';
-import Drafts from './pages/Drafts';
-import Trash from './pages/Trash';
 import Contacts from './pages/Contacts';
 import CalendarPage from './pages/Calendar';
 import SettingsPage from './pages/Settings';
@@ -58,10 +55,11 @@ export default function App() {
             </ProtectedRoute>
           }
         >
+          {/* Inbox handles all mail views via route-based view switching */}
           <Route index element={<Inbox />} />
-          <Route path={ROUTES.SENT} element={<Sent />} />
-          <Route path={ROUTES.DRAFTS} element={<Drafts />} />
-          <Route path={ROUTES.TRASH} element={<Trash />} />
+          <Route path={ROUTES.SENT} element={<Inbox />} />
+          <Route path={ROUTES.DRAFTS} element={<Inbox />} />
+          <Route path={ROUTES.TRASH} element={<Inbox />} />
           <Route path={ROUTES.CONTACTS} element={<Contacts />} />
           <Route path={ROUTES.CALENDAR} element={<CalendarPage />} />
           <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
