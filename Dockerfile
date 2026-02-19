@@ -18,7 +18,7 @@ COPY . .
 
 # Build frontend
 WORKDIR /app/web
-RUN npm ci && npm run build
+RUN npm install && npm run build
 
 # Back to app root
 WORKDIR /app
