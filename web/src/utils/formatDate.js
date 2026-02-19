@@ -1,61 +1,56 @@
-import {
-  formatDistanceToNowStrict,
-  format,
-  isToday,
-  isYesterday,
-  isThisYear,
-} from 'date-fns';
-
 /**
- * Format a date for thread list display.
- * - < 1 hour: "3m"
- * - Today: "2:30 PM"
- * - Yesterday: "Yesterday"
- * - This year: "Feb 19"
- * - Older: "Feb 19, 2025"
+ * Format a date string into a human-friendly relative timestamp.
+ * - Under 1 min: "just now"
+ * - Under 1 hour: "Xm ago"
+ * - Under 24 hours: "Xh ago"
+ * - Same year: "Jan 15"
+ * - Different year: "Jan 15, 2024"
  */
-export function formatThreadDate(dateStr) {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
+export function formatRelativeDate(dateString) {
+  if (!dateString) return '';
+
+  const date = new Date(dateString);
   const now = new Date();
   const diffMs = now - date;
-  const diffMin = Math.floor(diffMs / 60000);
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
 
-  if (diffMin < 60) {
-    return `${Math.max(1, diffMin)}m`;
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ago`;
+
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const month = months[date.getMonth()];
+  const day = date.getDate();
+
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${month} ${day}`;
   }
 
-  if (isToday(date)) {
-    return format(date, 'h:mm a');
-  }
-
-  if (isYesterday(date)) {
-    return 'Yesterday';
-  }
-
-  if (isThisYear(date)) {
-    return format(date, 'MMM d');
-  }
-
-  return format(date, 'MMM d, yyyy');
+  return `${month} ${day}, ${date.getFullYear()}`;
 }
 
 /**
- * Format a date for message detail view.
- * "Feb 19, 2026 at 2:30 PM"
+ * Format a date string into a full date/time for detail views.
+ * Example: "Jan 15, 2025 at 3:42 PM"
  */
-export function formatMessageDate(dateStr) {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  return format(date, "MMM d, yyyy 'at' h:mm a");
-}
+export function formatFullDate(dateString) {
+  if (!dateString) return '';
 
-/**
- * Format relative time for status bar.
- * "2 minutes ago"
- */
-export function formatRelativeTime(dateStr) {
-  if (!dateStr) return 'Never';
-  const date = new Date(dateStr);
-  return formatDistanceToNowStrict(date, { addSuffix: true });
+  const date = new Date(dateString);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const month = months[date.getMonth()];
+  const day = date.getDate();
+  const year = date.getFullYear();
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHour = hours % 12 || 12;
+
+  return `${month} ${day}, ${year} at ${displayHour}:${minutes} ${ampm}`;
 }

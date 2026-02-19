@@ -1,44 +1,56 @@
-const GRADIENTS = [
-  'linear-gradient(135deg, #667eea, #764ba2)',
-  'linear-gradient(135deg, #f093fb, #f5576c)',
-  'linear-gradient(135deg, #4facfe, #00f2fe)',
-  'linear-gradient(135deg, #43e97b, #38f9d7)',
-  'linear-gradient(135deg, #fa709a, #fee140)',
-  'linear-gradient(135deg, #a18cd1, #fbc2eb)',
-  'linear-gradient(135deg, #ffecd2, #fcb69f)',
-  'linear-gradient(135deg, #a1c4fd, #c2e9fb)',
+// Deterministic color palette for avatars
+const AVATAR_COLORS = [
+  '#6366f1', // indigo
+  '#8b5cf6', // violet
+  '#a855f7', // purple
+  '#d946ef', // fuchsia
+  '#ec4899', // pink
+  '#f43f5e', // rose
+  '#ef4444', // red
+  '#f97316', // orange
+  '#f59e0b', // amber
+  '#eab308', // yellow
+  '#84cc16', // lime
+  '#22c55e', // green
+  '#14b8a6', // teal
+  '#06b6d4', // cyan
+  '#3b82f6', // blue
+  '#2563eb', // blue-dark
 ];
 
-/**
- * Simple hash to pick a consistent gradient for a given name/email.
- */
 function hashString(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash |= 0; // Convert to 32-bit int
+    hash = hash & hash; // Convert to 32-bit integer
   }
   return Math.abs(hash);
 }
 
-/**
- * Get a gradient background for an avatar based on a name or email.
- */
-export function getAvatarGradient(name) {
-  if (!name) return GRADIENTS[0];
-  const index = hashString(name) % GRADIENTS.length;
-  return GRADIENTS[index];
+export function getAvatarColor(identifier) {
+  const hash = hashString(identifier.toLowerCase());
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
 }
 
-/**
- * Get initials from a name (up to 2 characters).
- */
+export function getAvatarStyle(identifier) {
+  const color = getAvatarColor(identifier);
+  return {
+    backgroundColor: color,
+  };
+}
+
 export function getInitials(name) {
   if (!name) return '?';
+
+  // If it's an email address, use the first letter
+  if (name.includes('@')) {
+    return name[0].toUpperCase();
+  }
+
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) {
-    return parts[0].charAt(0).toUpperCase();
+    return parts[0][0]?.toUpperCase() || '?';
   }
-  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
