@@ -1,0 +1,52 @@
+/* ============================================
+   AppShell — Main application layout
+   ============================================ */
+
+.shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-deep);
+  position: relative;
+  overflow: hidden;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+  z-index: var(--z-base);
+}
+
+/* === FUTURISTIC GRID OVERLAY === */
+.gridOverlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.015;
+  background-image:
+    linear-gradient(rgba(168, 85, 247, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 85, 247, 0.3) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(
+    ellipse at 50% 50%,
+    black 0%,
+    transparent 70%
+  );
+}
+
+/* === RESPONSIVE === */
+@media (max-width: 1024px) {
+  .main {
+    flex-direction: column;
+  }
+}

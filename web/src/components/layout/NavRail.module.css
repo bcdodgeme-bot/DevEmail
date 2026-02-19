@@ -1,0 +1,180 @@
+/* ============================================
+   NavRail — Left icon sidebar
+   ============================================ */
+
+.rail {
+  width: var(--nav-rail-width);
+  height: 100%;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-3) 0;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  z-index: var(--z-panel);
+}
+
+/* === LOGO === */
+.logo {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-2);
+}
+
+.logoImage {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  transition: transform var(--transition-normal);
+}
+
+.logoImage:hover {
+  transform: scale(1.08);
+}
+
+/* === COMPOSE BUTTON === */
+.composeButton {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-amber);
+  color: var(--bg-deep);
+  margin-bottom: var(--space-2);
+  transition: all var(--transition-fast);
+  box-shadow: var(--glow-amber);
+}
+
+.composeButton:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 0 24px rgba(245, 158, 11, 0.35);
+  transform: translateY(-1px);
+}
+
+.composeButton:active {
+  transform: translateY(0);
+}
+
+/* === SECTIONS === */
+.section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+/* === NAV ITEMS === */
+.navItem {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.navItem:hover {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
+
+.navItem.active {
+  color: var(--accent-purple);
+  background: var(--accent-purple-soft);
+  box-shadow: inset 0 0 0 1px rgba(168, 85, 247, 0.15);
+}
+
+.navItem.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: var(--accent-purple);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.4);
+}
+
+/* === BADGE === */
+.badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  color: white;
+  background: var(--accent-red);
+  border-radius: var(--radius-full);
+  line-height: 1;
+}
+
+/* === DIVIDER === */
+.divider {
+  width: 28px;
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-2) 0;
+}
+
+/* === SPACER === */
+.spacer {
+  flex: 1;
+}
+
+/* === USER AVATAR === */
+.userAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin-top: var(--space-1);
+  border: 2px solid transparent;
+}
+
+.userAvatar:hover {
+  border-color: var(--accent-purple);
+  box-shadow: var(--glow-purple);
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-full);
+}
+
+.avatarInitials {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: white;
+  border-radius: var(--radius-full);
+}

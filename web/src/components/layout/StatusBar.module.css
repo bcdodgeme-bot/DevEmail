@@ -1,0 +1,91 @@
+/* ============================================
+   StatusBar — Bottom status bar
+   ============================================ */
+
+.bar {
+  height: var(--status-bar-height);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-4);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.left,
+.center,
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.left {
+  flex: 1;
+}
+
+.center {
+  flex: 0 0 auto;
+}
+
+.right {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+/* === INDICATORS === */
+.indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.online {
+  color: var(--accent-green);
+}
+
+.offline {
+  color: var(--accent-red);
+}
+
+.syncing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent-blue);
+}
+
+.spinIcon {
+  animation: spin 1s linear infinite;
+}
+
+/* === TEXT === */
+.meta {
+  color: var(--text-muted);
+}
+
+.brand {
+  color: var(--text-secondary);
+  font-weight: var(--font-medium);
+}
+
+.dot {
+  color: var(--text-disabled);
+}
+
+.clock {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
