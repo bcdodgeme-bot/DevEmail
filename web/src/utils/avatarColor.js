@@ -23,7 +23,7 @@ function hashString(str) {
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash);
 }
@@ -40,6 +40,17 @@ export function getAvatarStyle(identifier) {
   };
 }
 
+/**
+ * Get a CSS gradient string for an avatar background.
+ * Used by NavRail for the user avatar.
+ */
+export function getAvatarGradient(identifier) {
+  const hash = hashString(identifier.toLowerCase());
+  const color1 = AVATAR_COLORS[hash % AVATAR_COLORS.length];
+  const color2 = AVATAR_COLORS[(hash + 3) % AVATAR_COLORS.length];
+  return `linear-gradient(135deg, ${color1}, ${color2})`;
+}
+
 export function getInitials(name) {
   if (!name) return '?';
 
@@ -54,6 +65,3 @@ export function getInitials(name) {
   }
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
-
-// Alias for NavRail compatibility
-export const getAvatarGradient = getAvatarColor;
