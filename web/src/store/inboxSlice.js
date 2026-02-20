@@ -1,0 +1,195 @@
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { apiFetch } from '../utils/api';
+
+/* ── Async thunks ─────────────────────────────────────── */
+
+/** Fetch thread list for any view (inbox, sent, drafts, trash) */
+export const fetchThreads = createAsyncThunk(
+  'inbox/fetchThreads',
+  async ({ view = 'inbox', page = 1, perPage = 50 } = {}) => {
+    const endpoint = `/messages/${view}`;
+    const params = new URLSearchParams({ page, per_page: perPage });
+    return apiFetch(`${endpoint}?${params}`);
+  }
+);
+
+/** Fetch full thread detail */
+export const fetchThreadDetail = createAsyncThunk(
+  'inbox/fetchThreadDetail',
+  async (threadId) => {
+    return apiFetch(`/messages/threads/${threadId}`);
+  }
+);
+
+/** Toggle star on a thread */
+export const toggleStar = createAsyncThunk(
+  'inbox/toggleStar',
+  async (threadId) => {
+    const data = await apiFetch(`/messages/threads/${threadId}/star`, { method: 'PATCH' });
+    return { threadId, ...data };
+  }
+);
+
+/** Mark thread as read */
+export const markRead = createAsyncThunk(
+  'inbox/markRead',
+  async (threadId) => {
+    await apiFetch(`/messages/threads/${threadId}/read`, { method: 'PATCH' });
+    return { threadId };
+  }
+);
+
+/** Archive a thread */
+export const archiveThread = createAsyncThunk(
+  'inbox/archiveThread',
+  async (threadId) => {
+    await apiFetch(`/messages/threads/${threadId}/archive`, { method: 'PATCH' });
+    return { threadId };
+  }
+);
+
+/** Trash a thread */
+export const trashThread = createAsyncThunk(
+  'inbox/trashThread',
+  async (threadId) => {
+    await apiFetch(`/messages/threads/${threadId}/trash`, { method: 'PATCH' });
+    return { threadId };
+  }
+);
+
+/** Mark thread as unread */
+export const markUnread = createAsyncThunk(
+  'inbox/markUnread',
+  async (threadId) => {
+    await apiFetch(`/messages/threads/${threadId}/unread`, { method: 'PATCH' });
+    return { threadId };
+  }
+);
+
+/* ── Slice ────────────────────────────────────────────── */
+
+const inboxSlice = createSlice({
+  name: 'inbox',
+  initialState: {
+    /* Thread list */
+    threads: [],
+    total: 0,
+    page: 1,
+    perPage: 50,
+    view: 'inbox',          // inbox | sent | drafts | trash
+    listStatus: 'idle',     // idle | loading | succeeded | failed
+    listError: null,
+
+    /* Selected thread detail */
+    selectedThreadId: null,
+    threadDetail: null,
+    detailStatus: 'idle',
+    detailError: null,
+  },
+
+  reducers: {
+    setView(state, action) {
+      state.view = action.payload;
+      state.selectedThreadId = null;
+      state.threadDetail = null;
+    },
+    selectThread(state, action) {
+      state.selectedThreadId = action.payload;
+    },
+    clearSelection(state) {
+      state.selectedThreadId = null;
+      state.threadDetail = null;
+    },
+  },
+
+  extraReducers: (builder) => {
+    /* ── fetchThreads ── */
+    builder
+      .addCase(fetchThreads.pending, (state) => {
+        state.listStatus = 'loading';
+        state.listError = null;
+      })
+      .addCase(fetchThreads.fulfilled, (state, action) => {
+        state.listStatus = 'succeeded';
+        state.threads = action.payload.threads;
+        state.total = action.payload.total;
+        state.page = action.payload.page;
+        state.perPage = action.payload.per_page;
+      })
+      .addCase(fetchThreads.rejected, (state, action) => {
+        state.listStatus = 'failed';
+        state.listError = action.error.message;
+      });
+
+    /* ── fetchThreadDetail ── */
+    builder
+      .addCase(fetchThreadDetail.pending, (state) => {
+        state.detailStatus = 'loading';
+        state.detailError = null;
+      })
+      .addCase(fetchThreadDetail.fulfilled, (state, action) => {
+        state.detailStatus = 'succeeded';
+        state.threadDetail = action.payload;
+      })
+      .addCase(fetchThreadDetail.rejected, (state, action) => {
+        state.detailStatus = 'failed';
+        state.detailError = action.error.message;
+      });
+
+    /* ── toggleStar ── */
+    builder.addCase(toggleStar.fulfilled, (state, action) => {
+      const { threadId, is_starred } = action.payload;
+      const t = state.threads.find((t) => t.id === threadId);
+      if (t) t.is_starred = is_starred;
+      if (state.threadDetail?.id === threadId) {
+        state.threadDetail.is_starred = is_starred;
+      }
+    });
+
+    /* ── markRead ── */
+    builder.addCase(markRead.fulfilled, (state, action) => {
+      const { threadId } = action.payload;
+      const t = state.threads.find((t) => t.id === threadId);
+      if (t) t.has_unread = false;
+    });
+
+    /* ── markUnread ── */
+    builder.addCase(markUnread.fulfilled, (state, action) => {
+      const { threadId } = action.payload;
+      const t = state.threads.find((t) => t.id === threadId);
+      if (t) t.has_unread = true;
+    });
+
+    /* ── archiveThread — remove from list ── */
+    builder.addCase(archiveThread.fulfilled, (state, action) => {
+      state.threads = state.threads.filter((t) => t.id !== action.payload.threadId);
+      if (state.selectedThreadId === action.payload.threadId) {
+        state.selectedThreadId = null;
+        state.threadDetail = null;
+      }
+    });
+
+    /* ── trashThread — remove from list ── */
+    builder.addCase(trashThread.fulfilled, (state, action) => {
+      state.threads = state.threads.filter((t) => t.id !== action.payload.threadId);
+      if (state.selectedThreadId === action.payload.threadId) {
+        state.selectedThreadId = null;
+        state.threadDetail = null;
+      }
+    });
+  },
+});
+
+/* ── Exports ──────────────────────────────────────────── */
+
+export const { setView, selectThread, clearSelection } = inboxSlice.actions;
+
+export const selectThreads = (state) => state.inbox.threads;
+export const selectListStatus = (state) => state.inbox.listStatus;
+export const selectListError = (state) => state.inbox.listError;
+export const selectView = (state) => state.inbox.view;
+export const selectSelectedThreadId = (state) => state.inbox.selectedThreadId;
+export const selectThreadDetail = (state) => state.inbox.threadDetail;
+export const selectDetailStatus = (state) => state.inbox.detailStatus;
+
+export default inboxSlice.reducer;

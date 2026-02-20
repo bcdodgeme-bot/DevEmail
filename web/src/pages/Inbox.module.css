@@ -1,0 +1,51 @@
+/* Two-panel inbox layout */
+.inbox {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary, #0b1120);
+}
+
+/* ── Left panel: thread list ── */
+.listPanel {
+  width: 380px;
+  min-width: 320px;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+  background: var(--bg-secondary, #0f1729);
+}
+
+.listHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+}
+
+.viewTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+  margin: 0;
+}
+
+.threadCount {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  background: var(--bg-tertiary, rgba(139, 92, 246, 0.08));
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* ── Right panel: thread detail ── */
+.detailPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary, #0b1120);
+}

@@ -1,12 +1,12 @@
 import { configureStore } from '@reduxjs/toolkit';
 import authReducer from './authSlice';
+import inboxReducer from './inboxSlice';
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
-    // accounts: accountsReducer,   — Phase 2
-    // threads: threadsReducer,     — Phase 2
-    // messages: messagesReducer,   — Phase 3
+    inbox: inboxReducer,
+    // accounts: accountsReducer,   — Phase 3
     // contacts: contactsReducer,   — Phase 4
     // calendars: calendarsReducer, — Phase 5
   },
