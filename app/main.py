@@ -1,4 +1,5 @@
 import os
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,21 +34,11 @@ app.include_router(messages.router, prefix="/api")
 app.include_router(calendars.router, prefix="/api")
 
 
-@app.get("/")
-async def root():
-    return {
-        "app": settings.APP_NAME,
-        "version": "0.1.0",
-        "docs": "/api/docs",
-    }
-
-
 # --------------------------------------------------
 # Static file serving for React frontend
 # --------------------------------------------------
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
-import logging
 logging.info(f"STATIC_DIR={STATIC_DIR}, exists={os.path.exists(STATIC_DIR)}")
 if os.path.exists(STATIC_DIR):
     logging.info(f"Static dir contents: {os.listdir(STATIC_DIR)}")
