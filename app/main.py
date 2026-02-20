@@ -47,21 +47,32 @@ async def root():
 # --------------------------------------------------
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
+import logging
+logging.info(f"STATIC_DIR={STATIC_DIR}, exists={os.path.exists(STATIC_DIR)}")
 if os.path.exists(STATIC_DIR):
-    # Serve Vite-built assets (JS, CSS, etc.)
+    logging.info(f"Static dir contents: {os.listdir(STATIC_DIR)}")
+
+if os.path.exists(STATIC_DIR):
     assets_dir = os.path.join(STATIC_DIR, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
 
-    # SPA catch-all — serves index.html for all non-API routes
-    # This MUST be after all other routes
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Check if the file exists in static dir (e.g., logo.png, favicon.png)
         file_path = os.path.join(STATIC_DIR, full_path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
-        # Otherwise serve index.html for React Router
-        index_path = os.path.join(STATIC_DIR, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "app": settings.APP_NAME,
+            "version": "0.1.0",
+            "docs": "/api/docs",
+        }
