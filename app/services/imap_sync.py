@@ -9,6 +9,7 @@ import asyncio
 import email
 import imaplib
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from email.header import decode_header
@@ -23,6 +24,21 @@ from app.models.thread import Thread
 from app.models.message import Message
 
 logger = logging.getLogger(__name__)
+
+
+# ── Text sanitization ─────────────────────────────────
+
+def _sanitize_text(text: str) -> Optional[str]:
+    """Remove null bytes and other characters PostgreSQL can't store.
+    Returns None if the result is empty or was not real text."""
+    if not text:
+        return None
+    cleaned = text.replace("\x00", "")
+    # If after cleaning the string is mostly non-printable, it was probably binary
+    printable_ratio = sum(1 for c in cleaned[:200] if c.isprintable() or c in '\n\r\t') / max(len(cleaned[:200]), 1)
+    if printable_ratio < 0.5:
+        return None
+    return cleaned
 
 
 # ── Header decoding helpers ────────────────────────────
@@ -51,7 +67,6 @@ def parse_address_list(raw: str) -> list[dict]:
     """Parse a comma-separated address list."""
     if not raw:
         return []
-    # Split on commas, but be careful of commas inside quoted names
     addresses = []
     for part in raw.split(","):
         part = part.strip()
@@ -88,12 +103,19 @@ def get_body(msg: email.message.Message) -> tuple[Optional[str], Optional[str]]:
             if "attachment" in disposition:
                 continue
 
+            # Skip non-text parts entirely
+            if not content_type.startswith("text/"):
+                continue
+
             try:
                 payload = part.get_payload(decode=True)
                 if payload is None:
                     continue
                 charset = part.get_content_charset() or "utf-8"
                 decoded = payload.decode(charset, errors="replace")
+                decoded = _sanitize_text(decoded)
+                if decoded is None:
+                    continue
             except Exception:
                 continue
 
@@ -102,17 +124,21 @@ def get_body(msg: email.message.Message) -> tuple[Optional[str], Optional[str]]:
             elif content_type == "text/plain" and not body_text:
                 body_text = decoded
     else:
-        try:
-            payload = msg.get_payload(decode=True)
-            if payload:
-                charset = msg.get_content_charset() or "utf-8"
-                decoded = payload.decode(charset, errors="replace")
-                if msg.get_content_type() == "text/html":
-                    body_html = decoded
-                else:
-                    body_text = decoded
-        except Exception:
-            pass
+        content_type = msg.get_content_type()
+        if content_type.startswith("text/"):
+            try:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    charset = msg.get_content_charset() or "utf-8"
+                    decoded = payload.decode(charset, errors="replace")
+                    decoded = _sanitize_text(decoded)
+                    if decoded is not None:
+                        if content_type == "text/html":
+                            body_html = decoded
+                        else:
+                            body_text = decoded
+            except Exception:
+                pass
 
     return body_html, body_text
 
@@ -121,8 +147,6 @@ def make_snippet(body_text: Optional[str], body_html: Optional[str], max_len: in
     """Create a short preview snippet from the body."""
     source = body_text or ""
     if not source and body_html:
-        # Rough strip of HTML tags
-        import re
         source = re.sub(r"<[^>]+>", " ", body_html)
         source = re.sub(r"\s+", " ", source).strip()
     return source[:max_len] if source else ""
@@ -144,7 +168,7 @@ def count_attachments(msg: email.message.Message) -> int:
 def _imap_fetch_all(host: str, port: int, username: str, password: str, folder: str = "INBOX") -> list[bytes]:
     """Connect to IMAP and fetch all messages as raw bytes. Runs synchronously."""
     logger.info(f"Connecting to IMAP {host}:{port} as {username}")
-    
+
     mail = imaplib.IMAP4_SSL(host, port)
     mail.login(username, password)
     mail.select(folder, readonly=True)
@@ -163,11 +187,9 @@ def _imap_fetch_all(host: str, port: int, username: str, password: str, folder: 
     for num in message_nums:
         status, msg_data = mail.fetch(num, "(UID RFC822)")
         if status == "OK" and msg_data[0] is not None:
-            # msg_data[0] is a tuple: (b'UID RFC822 response', raw_email_bytes)
             if isinstance(msg_data[0], tuple):
                 uid_line = msg_data[0][0].decode("utf-8", errors="replace")
                 raw_email = msg_data[0][1]
-                # Extract UID from response line like b'1 (UID 5 RFC822 {1234}'
                 uid = None
                 if b"UID" in msg_data[0][0]:
                     parts = uid_line.split()
@@ -190,13 +212,12 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     2. Skip any already imported (by remote_id / message_id_header)
     3. Group into threads by subject + in-reply-to
     4. Create Thread + Message records
-    
+
     Returns a summary dict.
     """
     if not account.imap_host or not account.username or not account.password:
         return {"error": "Account missing IMAP credentials"}
 
-    # Fetch raw messages in a background thread
     try:
         raw_messages = await asyncio.to_thread(
             _imap_fetch_all,
@@ -221,7 +242,6 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     )
     existing_msg_ids = set(row[0] for row in existing_result.all())
 
-    # Get existing remote_ids
     existing_remote_result = await db.execute(
         select(Message.remote_id).where(
             Message.account_id == account.id,
@@ -234,7 +254,6 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     skipped_count = 0
 
     for uid, raw_email in raw_messages:
-        # Parse the email
         msg = email.message_from_bytes(raw_email)
 
         message_id = msg.get("Message-ID", "").strip()
@@ -257,7 +276,7 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
         references_header = msg.get("References", "").strip() or None
         date = parse_date(msg)
 
-        # Get body
+        # Get body (with sanitization)
         body_html, body_text = get_body(msg)
         snippet = make_snippet(body_text, body_html)
         attachment_count = count_attachments(msg)
@@ -329,15 +348,13 @@ async def _find_or_create_thread(
 ) -> Thread:
     """
     Find an existing thread to attach this message to, or create a new one.
-    
+
     Threading logic:
     1. If in_reply_to matches an existing message's message_id_header → use that thread
     2. If references contain any known message_id_header → use that thread
     3. If subject matches (after stripping Re:/Fwd:) → use that thread
     4. Otherwise create a new thread
     """
-    import re
-
     # Strategy 1: Match by in_reply_to
     if in_reply_to:
         result = await db.execute(
@@ -357,7 +374,7 @@ async def _find_or_create_thread(
     # Strategy 2: Match by references
     if references:
         ref_ids = references.split()
-        for ref_id in reversed(ref_ids):  # Most recent reference first
+        for ref_id in reversed(ref_ids):
             ref_id = ref_id.strip()
             if ref_id:
                 result = await db.execute(
@@ -395,5 +412,5 @@ async def _find_or_create_thread(
         last_message_at=date,
     )
     db.add(thread)
-    await db.flush()  # Get the ID assigned
+    await db.flush()
     return thread
