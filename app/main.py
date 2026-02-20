@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.routers import auth, contacts, health, accounts, messages, calendars
+from app.routers import auth, contacts, health, accounts, messages, calendars, sync
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -32,6 +32,7 @@ app.include_router(contacts.router, prefix="/api")
 app.include_router(accounts.router, prefix="/api")
 app.include_router(messages.router, prefix="/api")
 app.include_router(calendars.router, prefix="/api")
+app.include_router(sync.router, prefix="/api")
 
 
 # --------------------------------------------------
