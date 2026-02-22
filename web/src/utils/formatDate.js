@@ -39,3 +39,5 @@ export function formatDateTime(dateString) {
     minute: '2-digit',
   });
 }
+
+export const formatRelativeDate = formatDate;
