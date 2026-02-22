@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import NavRail from './NavRail';
 import StatusBar from './StatusBar';
-import ComposeModal from './compose/ComposeModal';
-import CommandPalette from './common/CommandPalette';
-import SearchModal from './common/SearchModal';
+import ComposeModal from '../compose/ComposeModal';
+import CommandPalette from '../common/CommandPalette';
+import SearchModal from '../common/SearchModal';
 import styles from './AppShell.module.css';
 
 export default function AppShell() {
