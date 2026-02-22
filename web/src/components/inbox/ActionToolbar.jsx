@@ -5,7 +5,6 @@ import {
   Archive,
   Trash2,
   Star,
-  MailOpen,
   MailX,
 } from 'lucide-react';
 import {
@@ -21,73 +20,73 @@ export default function ActionToolbar({ thread }) {
 
   if (!thread) return null;
 
-  const actions = [
-    {
-      key: 'reply',
-      icon: Reply,
-      label: 'Reply',
-      onClick: () => {
-        window.dispatchEvent(new CustomEvent('devemail:compose', {
-          detail: { replyTo: thread },
-        }));
-      },
-    },
-    {
-      key: 'forward',
-      icon: Forward,
-      label: 'Forward',
-      onClick: () => {
-        window.dispatchEvent(new CustomEvent('devemail:compose', {
-          detail: { forward: thread },
-        }));
-      },
-    },
-    { key: 'divider1' },
-    {
-      key: 'star',
-      icon: Star,
-      label: thread.is_starred ? 'Unstar' : 'Star',
-      active: thread.is_starred,
-      onClick: () => dispatch(toggleStar(thread.id)),
-    },
-    {
-      key: 'unread',
-      icon: MailX,
-      label: 'Mark unread',
-      onClick: () => dispatch(markUnread(thread.id)),
-    },
-    {
-      key: 'archive',
-      icon: Archive,
-      label: 'Archive',
-      onClick: () => dispatch(archiveThread(thread.id)),
-    },
-    {
-      key: 'trash',
-      icon: Trash2,
-      label: 'Delete',
-      danger: true,
-      onClick: () => dispatch(trashThread(thread.id)),
-    },
-  ];
+  const handleReply = () => {
+    console.log('Reply clicked, thread:', thread);
+    window.dispatchEvent(
+      new CustomEvent('devemail:compose', {
+        detail: { replyTo: thread },
+      })
+    );
+  };
+
+  const handleForward = () => {
+    console.log('Forward clicked, thread:', thread);
+    window.dispatchEvent(
+      new CustomEvent('devemail:compose', {
+        detail: { forward: thread },
+      })
+    );
+  };
 
   return (
     <div className={styles.toolbar}>
-      {actions.map((action) =>
-        action.key.startsWith('divider') ? (
-          <div key={action.key} className={styles.divider} />
-        ) : (
-          <button
-            key={action.key}
-            className={`${styles.btn} ${action.active ? styles.active : ''} ${action.danger ? styles.danger : ''}`}
-            onClick={action.onClick}
-            title={action.label}
-          >
-            <action.icon size={16} fill={action.active && action.key === 'star' ? '#f59e0b' : 'none'} />
-            <span className={styles.label}>{action.label}</span>
-          </button>
-        )
-      )}
+      <button className={styles.btn} onClick={handleReply} title="Reply">
+        <Reply size={16} />
+        <span className={styles.label}>Reply</span>
+      </button>
+
+      <button className={styles.btn} onClick={handleForward} title="Forward">
+        <Forward size={16} />
+        <span className={styles.label}>Forward</span>
+      </button>
+
+      <div className={styles.divider} />
+
+      <button
+        className={`${styles.btn} ${thread.is_starred ? styles.active : ''}`}
+        onClick={() => dispatch(toggleStar(thread.id))}
+        title={thread.is_starred ? 'Unstar' : 'Star'}
+      >
+        <Star size={16} fill={thread.is_starred ? '#f59e0b' : 'none'} />
+        <span className={styles.label}>{thread.is_starred ? 'Unstar' : 'Star'}</span>
+      </button>
+
+      <button
+        className={styles.btn}
+        onClick={() => dispatch(markUnread(thread.id))}
+        title="Mark unread"
+      >
+        <MailX size={16} />
+        <span className={styles.label}>Mark unread</span>
+      </button>
+
+      <button
+        className={styles.btn}
+        onClick={() => dispatch(archiveThread(thread.id))}
+        title="Archive"
+      >
+        <Archive size={16} />
+        <span className={styles.label}>Archive</span>
+      </button>
+
+      <button
+        className={`${styles.btn} ${styles.danger}`}
+        onClick={() => dispatch(trashThread(thread.id))}
+        title="Delete"
+      >
+        <Trash2 size={16} />
+        <span className={styles.label}>Delete</span>
+      </button>
     </div>
   );
 }
