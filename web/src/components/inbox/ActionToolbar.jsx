@@ -27,7 +27,9 @@ export default function ActionToolbar({ thread }) {
       icon: Reply,
       label: 'Reply',
       onClick: () => {
-        /* TODO: open compose in reply mode */
+        window.dispatchEvent(new CustomEvent('devemail:compose', {
+          detail: { replyTo: thread },
+        }));
       },
     },
     {
@@ -35,7 +37,9 @@ export default function ActionToolbar({ thread }) {
       icon: Forward,
       label: 'Forward',
       onClick: () => {
-        /* TODO: open compose in forward mode */
+        window.dispatchEvent(new CustomEvent('devemail:compose', {
+          detail: { forward: thread },
+        }));
       },
     },
     { key: 'divider1' },
