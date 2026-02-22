@@ -1,22 +1,52 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import NavRail from './NavRail';
 import StatusBar from './StatusBar';
+import ComposeModal from './compose/ComposeModal';
+import CommandPalette from './common/CommandPalette';
+import SearchModal from './common/SearchModal';
 import styles from './AppShell.module.css';
 
 export default function AppShell() {
   const [isComposing, setIsComposing] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [composeProps, setComposeProps] = useState({});
 
-  const handleCompose = () => {
+  const handleCompose = useCallback(() => {
+    setComposeProps({});
     setIsComposing(true);
-    // ComposeModal will be built in Phase 3
-  };
+  }, []);
 
-  const handleSearch = () => {
+  const handleSearch = useCallback(() => {
     setIsSearchOpen(true);
-    // CommandPalette will be built in Phase 6
-  };
+  }, []);
+
+  /* Cmd+K → Command Palette */
+  useEffect(() => {
+    function handleKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsPaletteOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  /* Listen for compose events from Contacts page */
+  useEffect(() => {
+    function handleComposeEvent(e) {
+      const { to, replyTo, replyAll, forward } = e.detail || {};
+      setComposeProps({ replyTo, replyAll, forward });
+      if (to) {
+        setComposeProps((prev) => ({ ...prev, prefillTo: to }));
+      }
+      setIsComposing(true);
+    }
+    window.addEventListener('devemail:compose', handleComposeEvent);
+    return () => window.removeEventListener('devemail:compose', handleComposeEvent);
+  }, []);
 
   return (
     <div className={styles.shell}>
@@ -28,8 +58,6 @@ export default function AppShell() {
         />
 
         <div className={styles.content}>
-          {/* Outlet renders the active route's component */}
-          {/* Each route provides its own center + right panel layout */}
           <Outlet />
         </div>
       </div>
@@ -43,6 +71,26 @@ export default function AppShell() {
 
       {/* Background grid texture */}
       <div className={styles.gridOverlay} aria-hidden="true" />
+
+      {/* Compose Modal */}
+      <ComposeModal
+        isOpen={isComposing}
+        onClose={() => setIsComposing(false)}
+        {...composeProps}
+      />
+
+      {/* Command Palette (Cmd+K) */}
+      <CommandPalette
+        isOpen={isPaletteOpen}
+        onClose={() => setIsPaletteOpen(false)}
+        onCompose={handleCompose}
+      />
+
+      {/* Search Modal */}
+      <SearchModal
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+      />
     </div>
   );
 }

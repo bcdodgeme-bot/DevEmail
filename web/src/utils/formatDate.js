@@ -1,49 +1,37 @@
 /**
- * Format a date string into a human-friendly relative date.
- * "Just now", "5m", "2h", "Yesterday", "Mon", "Jan 15", "Jan 15, 2024"
+ * Lightweight date formatter.
+ * Returns relative strings for recent dates, formatted strings for older ones.
  */
-export function formatRelativeDate(dateStr) {
-  if (!dateStr) return '';
+export function formatDate(dateString) {
+  if (!dateString) return '';
 
-  const date = new Date(dateStr);
+  const date = new Date(dateString);
   const now = new Date();
   const diffMs = now - date;
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHr = Math.floor(diffMin / 60);
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHr = Math.floor(diffMs / 3600000);
+  const diffDay = Math.floor(diffMs / 86400000);
 
   if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin}m`;
-  if (diffHr < 24) return `${diffHr}h`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
 
-  // Check if yesterday
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const options = sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' };
 
-  // This week — show day name
-  const diffDays = Math.floor(diffHr / 24);
-  if (diffDays < 7) {
-    return date.toLocaleDateString('en-US', { weekday: 'short' });
-  }
-
-  // This year — show month + day
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  }
-
-  // Older — include year
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return date.toLocaleDateString('en-US', options);
 }
 
 /**
- * Format a date as a full readable string.
- * "Feb 19, 2026 at 7:30 PM"
+ * Format a full datetime string.
  */
-export function formatFullDate(dateStr) {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
+export function formatDateTime(dateString) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',

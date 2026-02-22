@@ -1,0 +1,171 @@
+/* ============================================
+   ContactList — List panel with search + alphabet
+   ============================================ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* === SEARCH BAR === */
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.searchField {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.searchField:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--accent-purple-soft);
+}
+
+.searchIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  height: 28px;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+}
+
+.searchInput::placeholder {
+  color: var(--text-disabled);
+}
+
+.addButton {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-purple-soft);
+  color: var(--accent-purple);
+  border: 1px solid rgba(168, 85, 247, 0.15);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.addButton:hover {
+  background: rgba(168, 85, 247, 0.15);
+  box-shadow: var(--glow-purple);
+}
+
+/* === LIST WRAPPER (list + alphabet) === */
+
+.listWrapper {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
+/* === LETTER HEADERS === */
+
+.letterHeader {
+  position: sticky;
+  top: 0;
+  padding: var(--space-1) var(--space-4);
+  font-size: 11px;
+  font-weight: var(--font-bold);
+  color: var(--accent-purple);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  z-index: 1;
+}
+
+/* === ALPHABET SIDEBAR === */
+
+.alphabet {
+  width: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) 0;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+
+.alphaLetter {
+  width: 20px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: var(--font-semibold);
+  color: var(--text-disabled);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+  padding: 0;
+}
+
+.alphaLetter:hover {
+  color: var(--accent-purple);
+}
+
+/* === STATES === */
+
+.loading,
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.loadMore {
+  width: 100%;
+  padding: var(--space-3);
+  background: none;
+  border: none;
+  color: var(--accent-purple);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.loadMore:hover {
+  background: var(--bg-glass-hover);
+}

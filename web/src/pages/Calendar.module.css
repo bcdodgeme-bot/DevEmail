@@ -1,0 +1,27 @@
+/* Two-panel calendar layout — matches Inbox/Contacts pattern */
+.calendar {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary, #0b1120);
+}
+
+/* ── Left panel: calendar grid ── */
+.gridPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+}
+
+/* ── Right panel: event detail ── */
+.detailPanel {
+  width: 340px;
+  min-width: 280px;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary, #0b1120);
+}

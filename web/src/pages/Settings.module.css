@@ -1,0 +1,62 @@
+/* Settings page — placeholder sections + about */
+
+.placeholder {
+  max-width: 480px;
+}
+
+.placeholderTitle {
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-2);
+}
+
+.placeholderText {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading-relaxed);
+  margin: 0;
+}
+
+/* === ABOUT === */
+
+.about {
+  max-width: 480px;
+}
+
+.aboutTitle {
+  font-size: var(--text-2xl);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
+  margin: 0;
+  background: linear-gradient(135deg, var(--accent-purple), var(--accent-amber));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.aboutVersion {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin: var(--space-1) 0 var(--space-4);
+}
+
+.aboutText {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  margin: 0 0 var(--space-4);
+}
+
+.aboutLinks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.aboutLink {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: var(--space-1) 0;
+}
