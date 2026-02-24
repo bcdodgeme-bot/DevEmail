@@ -18,9 +18,7 @@ export const loginUser = createAsyncThunk(
       const user = await authAPI.me();
       return { ...tokenData, user };
     } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || 'Invalid email or password'
-      );
+      return rejectWithValue(err.message || 'Invalid email or password');
     }
   }
 );
@@ -34,9 +32,7 @@ export const registerUser = createAsyncThunk(
       const user = await authAPI.me();
       return { ...tokenData, user };
     } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || 'Registration failed'
-      );
+      return rejectWithValue(err.message || 'Registration failed');
     }
   }
 );
@@ -47,7 +43,7 @@ export const fetchCurrentUser = createAsyncThunk(
     try {
       return await authAPI.me();
     } catch (err) {
-      return rejectWithValue(err.response?.data?.detail || 'Failed to fetch user');
+      return rejectWithValue(err.message || 'Failed to fetch user');
     }
   }
 );
@@ -123,6 +119,17 @@ const authSlice = createSlice({
     },
     clearError: (state) => {
       state.error = null;
+    },
+    // Synchronous reducer for OAuth callback — tokens + user arrive via URL params
+    setOAuthCredentials: (state, action) => {
+      const { access_token, refresh_token, user } = action.payload;
+      state.accessToken = access_token;
+      state.refreshToken = refresh_token;
+      state.user = user;
+      state.isAuthenticated = true;
+      state.isLoading = false;
+      state.error = null;
+      persistAuth(state);
     },
   },
   extraReducers: (builder) => {
@@ -204,7 +211,7 @@ const authSlice = createSlice({
   },
 });
 
-export const { updateTokens, clearError } = authSlice.actions;
+export const { updateTokens, clearError, setOAuthCredentials } = authSlice.actions;
 export const { clearCredentials } = { clearCredentials: authSlice.actions.clearError }; // alias for client.js compatibility
 
 // Selectors

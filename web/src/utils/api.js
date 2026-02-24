@@ -76,11 +76,12 @@ async function refreshAccessToken() {
  * Main fetch wrapper.
  * - Injects Authorization header
  * - On 401, tries to refresh the token and retry once
+ * - Pass { raw: true } to get the raw Response (e.g. for blob downloads)
  */
 export async function apiFetch(path, opts = {}) {
   const token = getAccessToken();
   const headers = {
-    'Content-Type': 'application/json',
+    ...(opts.raw ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...opts.headers,
   };
@@ -100,6 +101,7 @@ export async function apiFetch(path, opts = {}) {
         const body = await retryRes.json().catch(() => ({}));
         throw new Error(body.detail || `API error ${retryRes.status}`);
       }
+      if (opts.raw) return retryRes;
       return retryRes.json();
     } catch (err) {
       throw err;
@@ -111,5 +113,6 @@ export async function apiFetch(path, opts = {}) {
     throw new Error(body.detail || `API error ${res.status}`);
   }
 
+  if (opts.raw) return res;
   return res.json();
 }

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select, func, or_, and_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -405,7 +406,69 @@ async def mark_message_read(
     return {"is_read": True}
 
 
-# --- Bulk Actions ---
+# --- Attachment Download ---
+
+@router.get("/{message_id}/attachments/{attachment_id}/download")
+async def download_attachment(
+    message_id: str,
+    attachment_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download attachment content. Supports Gmail API and local storage."""
+    # Verify user owns the message
+    msg = await _get_message_or_404(db, user.id, message_id)
+
+    # Find the attachment
+    result = await db.execute(
+        select(Attachment).where(
+            Attachment.id == attachment_id,
+            Attachment.message_id == msg.id,
+        )
+    )
+    attachment = result.scalar_one_or_none()
+    if not attachment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+    # Get the account to determine provider
+    result = await db.execute(
+        select(Account).where(Account.id == msg.account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    # Download content based on provider
+    if account.provider == "gmail" and attachment.remote_id:
+        from app.services.gmail_sync import GmailSyncService
+        gmail = GmailSyncService(db, account)
+        try:
+            content = await gmail.fetch_attachment_content(attachment.remote_id)
+        finally:
+            await gmail._close()
+    elif attachment.storage_path:
+        import aiofiles
+        try:
+            async with aiofiles.open(attachment.storage_path, "rb") as f:
+                content = await f.read()
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Attachment file not found on disk",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment content not available",
+        )
+
+    return Response(
+        content=content,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"',
+        },
+    )
 
 @router.post("/bulk/read")
 async def bulk_mark_read(

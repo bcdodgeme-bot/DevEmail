@@ -34,6 +34,7 @@ export default function CalendarView({
   onDateSelect,
   onEventClick,
   onAddEvent,
+  syncButton,
 }) {
   const current = new Date(currentDate);
 
@@ -286,6 +287,7 @@ export default function CalendarView({
         </div>
 
         <div className={styles.toolbarRight}>
+          {syncButton}
           <div className={styles.viewToggle}>
             {VIEW_MODES.map(({ key, label }) => (
               <button

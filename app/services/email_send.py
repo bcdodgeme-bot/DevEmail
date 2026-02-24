@@ -115,6 +115,7 @@ class EmailSendService:
             references=references,
             remote_id=remote_id,
             read_receipt=read_receipt,
+            attachments=attachments,
         )
 
         logger.info(f"Sent email via {self.account.provider} from {self.account.email_address} to {to}")
@@ -292,9 +293,11 @@ class EmailSendService:
         references: Optional[str],
         remote_id: Optional[str],
         read_receipt: bool,
+        attachments: list[dict] = None,
     ) -> Message:
         """Store sent message in the local database."""
         now = datetime.now(timezone.utc)
+        attachments = attachments or []
 
         # Find existing thread or create new one
         thread = None
@@ -341,7 +344,7 @@ class EmailSendService:
             is_read=True,
             is_sent=True,
             is_draft=False,
-            has_attachments=False,
+            has_attachments=len(attachments) > 0,
             read_receipt_requested=read_receipt,
             in_reply_to=in_reply_to,
             references=references,

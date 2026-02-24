@@ -70,6 +70,7 @@ class EventResponse(BaseModel):
     recurrence_rule: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    recurrence_human: Optional[str] = None
 
     class Config:
         from_attributes = True

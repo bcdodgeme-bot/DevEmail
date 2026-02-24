@@ -56,4 +56,10 @@ export const calendarsAPI = {
   async deleteEvent(eventId) {
     return apiFetch(`/calendars/events/${eventId}`, { method: 'DELETE' });
   },
+
+  /* ── Sync ── */
+
+  async syncCalendars() {
+    return apiFetch('/calendars/sync', { method: 'POST' });
+  },
 };

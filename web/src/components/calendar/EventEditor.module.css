@@ -270,3 +270,92 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* === ADD these to EventEditor.module.css === */
+
+.recurrenceHint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #7a7a90);
+  font-style: italic;
+}
+
+.customRecurrence {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-primary, #3a3a50);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.customRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.customRow .label {
+  min-width: 60px;
+}
+
+.numberInput {
+  width: 60px;
+  padding: 6px 8px;
+  background: var(--bg-primary, #12121a);
+  border: 1px solid var(--border-primary, #3a3a50);
+  border-radius: 6px;
+  color: var(--text-primary, #e0e0f0);
+  font-size: 13px;
+  text-align: center;
+}
+
+.dayPicker {
+  display: flex;
+  gap: 4px;
+}
+
+.dayBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border-primary, #3a3a50);
+  background: var(--bg-primary, #12121a);
+  color: var(--text-secondary, #a0a0b8);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dayBtn:hover {
+  border-color: var(--accent-purple, #7c5cbf);
+}
+
+.dayBtnActive {
+  background: var(--accent-purple, #7c5cbf);
+  border-color: var(--accent-purple, #7c5cbf);
+  color: #fff;
+}
+
+.applyBtn {
+  align-self: flex-end;
+  padding: 6px 16px;
+  background: var(--accent-purple, #7c5cbf);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.applyBtn:hover {
+  opacity: 0.85;
+}

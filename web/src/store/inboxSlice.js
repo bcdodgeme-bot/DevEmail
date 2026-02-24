@@ -66,6 +66,27 @@ export const markUnread = createAsyncThunk(
   }
 );
 
+/** Snooze a thread until a specified time */
+export const snoozeThread = createAsyncThunk(
+  'inbox/snoozeThread',
+  async ({ threadId, snoozedUntil }) => {
+    const data = await apiFetch(`/messages/threads/${threadId}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ snoozed_until: snoozedUntil }),
+    });
+    return { threadId, ...data };
+  }
+);
+
+/** Unsnooze a thread */
+export const unsnoozeThread = createAsyncThunk(
+  'inbox/unsnoozeThread',
+  async (threadId) => {
+    const data = await apiFetch(`/messages/threads/${threadId}/unsnooze`, { method: 'PATCH' });
+    return { threadId, ...data };
+  }
+);
+
 /* ── Slice ────────────────────────────────────────────── */
 
 const inboxSlice = createSlice({
@@ -85,6 +106,10 @@ const inboxSlice = createSlice({
     threadDetail: null,
     detailStatus: 'idle',
     detailError: null,
+
+    /* Sync / connection tracking */
+    lastSynced: null,        // ISO timestamp of last successful fetch
+    isConnected: true,       // tracks whether last API call succeeded
   },
 
   reducers: {
@@ -115,10 +140,13 @@ const inboxSlice = createSlice({
         state.total = action.payload.total;
         state.page = action.payload.page;
         state.perPage = action.payload.per_page;
+        state.lastSynced = new Date().toISOString();
+        state.isConnected = true;
       })
       .addCase(fetchThreads.rejected, (state, action) => {
         state.listStatus = 'failed';
         state.listError = action.error.message;
+        state.isConnected = false;
       });
 
     /* ── fetchThreadDetail ── */
@@ -130,6 +158,7 @@ const inboxSlice = createSlice({
       .addCase(fetchThreadDetail.fulfilled, (state, action) => {
         state.detailStatus = 'succeeded';
         state.threadDetail = action.payload;
+        state.isConnected = true;
       })
       .addCase(fetchThreadDetail.rejected, (state, action) => {
         state.detailStatus = 'failed';
@@ -177,6 +206,35 @@ const inboxSlice = createSlice({
         state.threadDetail = null;
       }
     });
+
+    /* ── snoozeThread — remove from inbox list ── */
+    builder.addCase(snoozeThread.fulfilled, (state, action) => {
+      const { threadId, is_snoozed, snoozed_until } = action.payload;
+      // Remove from inbox since snoozed threads are hidden
+      state.threads = state.threads.filter((t) => t.id !== threadId);
+      if (state.threadDetail?.id === threadId) {
+        state.threadDetail.is_snoozed = is_snoozed;
+        state.threadDetail.snoozed_until = snoozed_until;
+      }
+      if (state.selectedThreadId === threadId) {
+        state.selectedThreadId = null;
+        state.threadDetail = null;
+      }
+    });
+
+    /* ── unsnoozeThread ── */
+    builder.addCase(unsnoozeThread.fulfilled, (state, action) => {
+      const { threadId } = action.payload;
+      const t = state.threads.find((t) => t.id === threadId);
+      if (t) {
+        t.is_snoozed = false;
+        t.snoozed_until = null;
+      }
+      if (state.threadDetail?.id === threadId) {
+        state.threadDetail.is_snoozed = false;
+        state.threadDetail.snoozed_until = null;
+      }
+    });
   },
 });
 
@@ -191,5 +249,9 @@ export const selectView = (state) => state.inbox.view;
 export const selectSelectedThreadId = (state) => state.inbox.selectedThreadId;
 export const selectThreadDetail = (state) => state.inbox.threadDetail;
 export const selectDetailStatus = (state) => state.inbox.detailStatus;
+export const selectLastSynced = (state) => state.inbox.lastSynced;
+export const selectIsConnected = (state) => state.inbox.isConnected;
+export const selectUnreadCount = (state) =>
+  state.inbox.threads.filter((t) => t.has_unread).length;
 
 export default inboxSlice.reducer;

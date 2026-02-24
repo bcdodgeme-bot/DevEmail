@@ -19,7 +19,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'https://devemail-production.up.railway.app',
+        target: 'https://devemail.damnitcarl.dev',
         changeOrigin: true,
         secure: true,
       },

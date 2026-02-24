@@ -1,11 +1,13 @@
 import { useEffect, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { RefreshCw } from 'lucide-react';
 import {
   fetchCalendars,
   fetchEvents,
   createEvent,
   updateEvent,
   deleteEvent,
+  syncCalendars,
   setViewMode,
   setSelectedDate,
   selectEvent,
@@ -25,6 +27,7 @@ import {
   selectSelectedEvent,
   selectIsEditorOpen,
   selectEditingEvent,
+  selectSyncStatus,
 } from '../store/calendarsSlice';
 import CalendarView from '../components/calendar/CalendarView';
 import EventDetail from '../components/calendar/EventDetail';
@@ -43,6 +46,7 @@ export default function CalendarPage() {
   const selectedEvent = useSelector(selectSelectedEvent);
   const isEditorOpen = useSelector(selectIsEditorOpen);
   const editingEvent = useSelector(selectEditingEvent);
+  const syncStatus = useSelector(selectSyncStatus);
 
   /* Initial fetch */
   useEffect(() => {
@@ -129,6 +133,11 @@ export default function CalendarPage() {
     [dispatch]
   );
 
+  const handleSync = useCallback(
+    () => dispatch(syncCalendars()),
+    [dispatch]
+  );
+
   /* Find calendar for selected event */
   const selectedEventCalendar = useMemo(() => {
     if (!selectedEvent) return null;
@@ -151,6 +160,21 @@ export default function CalendarPage() {
           onDateSelect={handleDateSelect}
           onEventClick={handleEventClick}
           onAddEvent={handleAddEvent}
+          syncButton={
+            <button
+              className={styles.syncBtn}
+              onClick={handleSync}
+              disabled={syncStatus === 'loading'}
+              title="Sync Google Calendar"
+              type="button"
+            >
+              <RefreshCw
+                size={14}
+                className={syncStatus === 'loading' ? styles.spinning : ''}
+              />
+              {syncStatus === 'loading' ? 'Syncing…' : 'Sync'}
+            </button>
+          }
         />
       </div>
 

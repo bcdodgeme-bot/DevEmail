@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useParams } from 'react-router-dom';
 import {
   fetchContacts,
   fetchContactDetail,
@@ -27,6 +28,7 @@ import styles from './Contacts.module.css';
 
 export default function Contacts() {
   const dispatch = useDispatch();
+  const { contactId: urlContactId } = useParams();
 
   const contacts = useSelector(selectContacts);
   const total = useSelector(selectContactsTotal);
@@ -44,6 +46,14 @@ export default function Contacts() {
   useEffect(() => {
     dispatch(fetchContacts({}));
   }, [dispatch]);
+
+  /* Deep-link: auto-select contact from URL param */
+  useEffect(() => {
+    if (urlContactId && urlContactId !== selectedId) {
+      dispatch(selectContact(urlContactId));
+      dispatch(fetchContactDetail(urlContactId));
+    }
+  }, [urlContactId, selectedId, dispatch]);
 
   /* Debounced search */
   const handleSearchChange = useCallback(
@@ -122,8 +132,6 @@ export default function Contacts() {
 
   /* Compose email to contact */
   const handleComposeEmail = useCallback((address, name) => {
-    // This will be wired to ComposeModal via AppShell
-    // For now, trigger a custom event that AppShell can listen for
     window.dispatchEvent(
       new CustomEvent('devemail:compose', {
         detail: { to: [{ address, name }] },

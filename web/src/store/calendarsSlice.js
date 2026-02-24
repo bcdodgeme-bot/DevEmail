@@ -65,15 +65,21 @@ export const createCalendar = createAsyncThunk(
   }
 );
 
-/* ── Helpers ──────────────────────────────────────────── */
-
-function startOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function endOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
-}
+/** Sync calendars + events from Google (#6) */
+export const syncCalendars = createAsyncThunk(
+  'calendars/syncCalendars',
+  async (_, { dispatch, getState }) => {
+    const result = await apiFetch('/calendars/sync', { method: 'POST' });
+    // Re-fetch calendars and events after sync
+    await dispatch(fetchCalendars());
+    const state = getState().calendars;
+    const d = new Date(state.currentDate);
+    const start = new Date(d.getFullYear(), d.getMonth() - 1, 1).toISOString();
+    const end = new Date(d.getFullYear(), d.getMonth() + 2, 0).toISOString();
+    await dispatch(fetchEvents({ start, end }));
+    return result;
+  }
+);
 
 /* ── Slice ────────────────────────────────────────────── */
 
@@ -90,6 +96,10 @@ const calendarsSlice = createSlice({
     events: [],
     eventsStatus: 'idle',
     eventsError: null,
+
+    /* Sync */
+    syncStatus: 'idle',
+    syncError: null,
 
     /* View state */
     viewMode: 'month', // month | week | day
@@ -209,6 +219,20 @@ const calendarsSlice = createSlice({
     builder.addCase(createCalendar.fulfilled, (state, action) => {
       state.calendars.push(action.payload);
     });
+
+    /* ── syncCalendars ── */
+    builder
+      .addCase(syncCalendars.pending, (state) => {
+        state.syncStatus = 'loading';
+        state.syncError = null;
+      })
+      .addCase(syncCalendars.fulfilled, (state) => {
+        state.syncStatus = 'succeeded';
+      })
+      .addCase(syncCalendars.rejected, (state, action) => {
+        state.syncStatus = 'failed';
+        state.syncError = action.error.message;
+      });
   },
 });
 
@@ -238,5 +262,6 @@ export const selectSelectedDate = (state) => state.calendars.selectedDate;
 export const selectSelectedEvent = (state) => state.calendars.selectedEvent;
 export const selectIsEditorOpen = (state) => state.calendars.isEditorOpen;
 export const selectEditingEvent = (state) => state.calendars.editingEvent;
+export const selectSyncStatus = (state) => state.calendars.syncStatus;
 
 export default calendarsSlice.reducer;

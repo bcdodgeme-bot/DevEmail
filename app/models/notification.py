@@ -1,23 +1,45 @@
+"""
+Notification model — stores in-app notifications.
+"""
+
 import uuid
-from datetime import datetime, time
-from sqlalchemy import Integer, Boolean, Time, DateTime, ForeignKey, func
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, String, Boolean, Text, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.database import Base
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    category = Column(String(50), nullable=False)  # new_email, calendar_reminder, system
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    reference_id = Column(String(255), nullable=True)  # message_id or event_id for deep linking
+
+    read = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class NotificationPreference(Base):
     __tablename__ = "notification_preferences"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
-    notify_new_email: Mapped[bool] = mapped_column(Boolean, default=True)
-    notify_calendar_reminder: Mapped[bool] = mapped_column(Boolean, default=True)
-    reminder_minutes_before: Mapped[int] = mapped_column(Integer, default=15)
-    quiet_hours_start: Mapped[time | None] = mapped_column(Time)
-    quiet_hours_end: Mapped[time | None] = mapped_column(Time)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
 
-    # Relationships
-    user = relationship("User", back_populates="notification_preferences")
+    notify_new_email = Column(Boolean, default=True)
+    notify_calendar = Column(Boolean, default=True)
+    email_notifications = Column(Boolean, default=False)
+    reminder_minutes = Column(String(10), default="15")  # minutes before event
+
+    quiet_start = Column(String(5), nullable=True)  # "22:00"
+    quiet_end = Column(String(5), nullable=True)    # "07:00"
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

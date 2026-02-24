@@ -4,6 +4,9 @@ import { fetchAccounts, selectAccountsStatus } from '../store/accountsSlice';
 import SettingsLayout from '../components/settings/SettingsLayout';
 import AccountManager from '../components/settings/AccountManager';
 import SignatureEditor from '../components/settings/SignatureEditor';
+import AppearanceSettings from '../components/settings/AppearanceSettings';
+import NotificationSettings from '../components/settings/NotificationSettings';
+import PrivacySettings from '../components/settings/PrivacySettings';
 import styles from './Settings.module.css';
 
 export default function Settings() {
@@ -25,35 +28,11 @@ export default function Settings() {
       case 'signatures':
         return <SignatureEditor />;
       case 'appearance':
-        return (
-          <div className={styles.placeholder}>
-            <h3 className={styles.placeholderTitle}>Appearance</h3>
-            <p className={styles.placeholderText}>
-              Theme customization coming soon. Currently using the Syntax Prime
-              dark theme with navy/purple palette.
-            </p>
-          </div>
-        );
+        return <AppearanceSettings />;
       case 'notifications':
-        return (
-          <div className={styles.placeholder}>
-            <h3 className={styles.placeholderTitle}>Notifications</h3>
-            <p className={styles.placeholderText}>
-              Desktop and email notification preferences will be available in a
-              future update.
-            </p>
-          </div>
-        );
+        return <NotificationSettings />;
       case 'privacy':
-        return (
-          <div className={styles.placeholder}>
-            <h3 className={styles.placeholderTitle}>Privacy & Security</h3>
-            <p className={styles.placeholderText}>
-              Read receipt settings, data export, and account deletion options
-              coming soon.
-            </p>
-          </div>
-        );
+        return <PrivacySettings />;
       case 'about':
         return (
           <div className={styles.about}>

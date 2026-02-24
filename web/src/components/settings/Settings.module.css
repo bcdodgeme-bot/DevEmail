@@ -1,0 +1,44 @@
+/* Settings page */
+
+/* === ABOUT === */
+
+.about {
+  max-width: 480px;
+}
+
+.aboutTitle {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary, #e2e8f0);
+  margin: 0;
+  background: linear-gradient(135deg, var(--accent-purple, #a78bfa), var(--accent-amber, #f59e0b));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.aboutVersion {
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+  font-family: var(--font-mono, monospace);
+  margin: 4px 0 16px;
+}
+
+.aboutText {
+  font-size: 13px;
+  color: var(--text-secondary, #94a3b8);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.aboutLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aboutLink {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  padding: 4px 0;
+}

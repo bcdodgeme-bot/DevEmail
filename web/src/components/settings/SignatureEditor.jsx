@@ -1,9 +1,30 @@
 import { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Plus, Trash2, Edit3, Save, X, Check } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import { selectAccounts, fetchAccounts } from '../../store/accountsSlice';
 import { accountsAPI } from '../../api/accounts';
 import styles from './SignatureEditor.module.css';
+
+function sanitizeHtml(html) {
+  if (!html) return '';
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      'a', 'b', 'i', 'u', 'em', 'strong', 'p', 'br', 'div', 'span',
+      'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'table', 'thead', 'tbody', 'tr', 'td', 'th',
+      'img', 'blockquote', 'pre', 'code', 'hr', 'sub', 'sup',
+      'font', 'center', 'small',
+    ],
+    ALLOWED_ATTR: [
+      'href', 'src', 'alt', 'title', 'style', 'class', 'width', 'height',
+      'target', 'rel', 'color', 'size', 'face', 'align', 'valign',
+      'bgcolor', 'border', 'cellpadding', 'cellspacing', 'colspan', 'rowspan',
+    ],
+    ALLOW_DATA_ATTR: false,
+    ADD_ATTR: ['target'],
+  });
+}
 
 export default function SignatureEditor() {
   const dispatch = useDispatch();
@@ -162,7 +183,7 @@ export default function SignatureEditor() {
               </div>
               <div
                 className={styles.sigPreview}
-                dangerouslySetInnerHTML={{ __html: sig.body_html || sig.body_text || '' }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(sig.body_html || sig.body_text || '') }}
               />
             </div>
           )

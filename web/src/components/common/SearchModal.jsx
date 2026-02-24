@@ -47,17 +47,24 @@ export default function SearchModal({ isOpen, onClose }) {
 
     setIsSearching(true);
     try {
-      const params = new URLSearchParams();
-      if (q.trim()) params.set('search', q.trim());
-      if (f.account_id) params.set('account_id', f.account_id);
-      if (f.date_from) params.set('date_from', f.date_from);
-      if (f.date_to) params.set('date_to', f.date_to);
-      if (f.has_attachment) params.set('has_attachment', 'true');
-      if (f.is_read === 'true' || f.is_read === 'false') params.set('is_read', f.is_read);
-      params.set('per_page', '20');
+      // Build JSON body matching backend MessageSearchRequest schema
+      const body = {
+        query: q.trim() || '',
+        page: 1,
+        per_page: 20,
+      };
+      if (f.account_id) body.account_id = f.account_id;
+      if (f.date_from) body.date_from = f.date_from;
+      if (f.date_to) body.date_to = f.date_to;
+      if (f.has_attachment) body.has_attachments = true;
+      if (f.is_read === 'true') body.is_read = true;
+      if (f.is_read === 'false') body.is_read = false;
 
-      const data = await apiFetch(`/messages/search?${params}`);
-      setResults(data.messages || data.threads || []);
+      const data = await apiFetch('/messages/search', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setResults(data.threads || []);
       setTotal(data.total || 0);
     } catch {
       setResults([]);
@@ -202,11 +209,12 @@ export default function SearchModal({ isOpen, onClose }) {
                   {result.subject || '(no subject)'}
                 </span>
                 <span className={styles.resultMeta}>
-                  {result.from_name || result.from_address || ''}
-                  {result.received_at && ` · ${formatDate(result.received_at)}`}
+                  {result.latest_from_name || result.latest_from_address || result.from_name || result.from_address || ''}
+                  {(result.last_message_at || result.received_at) &&
+                    ` · ${formatDate(result.last_message_at || result.received_at)}`}
                 </span>
-                {result.snippet && (
-                  <span className={styles.resultSnippet}>{result.snippet}</span>
+                {(result.latest_snippet || result.snippet) && (
+                  <span className={styles.resultSnippet}>{result.latest_snippet || result.snippet}</span>
                 )}
               </div>
             </button>

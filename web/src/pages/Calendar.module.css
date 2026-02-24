@@ -25,3 +25,37 @@
   overflow: hidden;
   background: var(--bg-primary, #0b1120);
 }
+/* === ADD these to Calendar.module.css === */
+
+.syncBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary, #2a2a3e);
+  color: var(--text-secondary, #a0a0b8);
+  border: 1px solid var(--border-primary, #3a3a50);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.syncBtn:hover {
+  background: var(--bg-hover, #33334a);
+  color: var(--text-primary, #e0e0f0);
+}
+
+.syncBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}

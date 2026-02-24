@@ -23,6 +23,9 @@ from app.models.unsubscribe import UnsubscribeLink
 
 logger = logging.getLogger(__name__)
 
+# Folder names that indicate sent mail (case-insensitive)
+SENT_FOLDER_NAMES = {"sent", "sent items", "sent mail", "sent messages"}
+
 
 class StalwartSyncService:
     """Handles syncing a single Stalwart mail account via IMAP."""
@@ -178,7 +181,7 @@ class StalwartSyncService:
             try:
                 msg_data = await self._fetch_message(uid)
                 if msg_data:
-                    await self._store_message(msg_data, remote_id, folder_id)
+                    await self._store_message(msg_data, remote_id, folder_id, folder_name)
                     new_count += 1
             except Exception as e:
                 logger.error(f"Failed to fetch message UID {uid}: {e}")
@@ -233,7 +236,13 @@ class StalwartSyncService:
         msg._imap_flags = flags
         return msg
 
-    async def _store_message(self, msg: email.message.Message, remote_id: str, folder_id: Optional[str]):
+    async def _store_message(
+        self,
+        msg: email.message.Message,
+        remote_id: str,
+        folder_id: Optional[str],
+        folder_name: str = "",
+    ):
         """Parse an email.message.Message and store in database."""
         # Parse headers
         from_raw = msg.get("From", "")
@@ -269,6 +278,9 @@ class StalwartSyncService:
         is_starred = "\\Flagged" in flags
         is_draft = "\\Draft" in flags
 
+        # Detect sent folder
+        is_sent = folder_name.lower().strip() in SENT_FOLDER_NAMES
+
         # Check for attachments
         has_attachments = _message_has_attachments(msg)
 
@@ -296,7 +308,7 @@ class StalwartSyncService:
             is_read=is_read,
             is_starred=is_starred,
             is_draft=is_draft,
-            is_sent=False,
+            is_sent=is_sent,
             is_trashed=False,
             has_attachments=has_attachments,
             received_at=received_at,

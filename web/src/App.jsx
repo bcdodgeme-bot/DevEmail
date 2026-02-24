@@ -57,10 +57,12 @@ export default function App() {
         >
           {/* Inbox handles all mail views via route-based view switching */}
           <Route index element={<Inbox />} />
+          <Route path="inbox/:threadId" element={<Inbox />} />
           <Route path={ROUTES.SENT} element={<Inbox />} />
           <Route path={ROUTES.DRAFTS} element={<Inbox />} />
           <Route path={ROUTES.TRASH} element={<Inbox />} />
           <Route path={ROUTES.CONTACTS} element={<Contacts />} />
+          <Route path="contacts/:contactId" element={<Contacts />} />
           <Route path={ROUTES.CALENDAR} element={<CalendarPage />} />
           <Route path={ROUTES.SETTINGS} element={<SettingsPage />} />
         </Route>

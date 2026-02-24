@@ -7,6 +7,7 @@ from typing import Optional
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
+from app.models.account import Account
 from app.models.calendar import Calendar, Event
 from app.schemas.calendar import (
     CalendarCreate,
@@ -18,6 +19,7 @@ from app.schemas.calendar import (
     EventResponse,
     EventListResponse,
 )
+from app.services.rrule_service import expand_rrule, rrule_to_human
 
 router = APIRouter(prefix="/calendars", tags=["calendars"])
 
@@ -62,62 +64,57 @@ async def create_calendar(
     return _to_calendar_response(calendar)
 
 
-@router.get("/{calendar_id}", response_model=CalendarResponse)
-async def get_calendar(
-    calendar_id: str,
+# --- Calendar sync ---
+
+@router.post("/sync")
+async def sync_google_calendars(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific calendar."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-    return _to_calendar_response(calendar)
+    """Sync calendars and events from all linked Gmail accounts."""
+    result = await db.execute(
+        select(Account).where(
+            Account.user_id == user.id,
+            Account.provider == "gmail",
+        )
+    )
+    accounts = result.scalars().all()
+
+    if not accounts:
+        return {"message": "No Gmail accounts linked", "synced": 0}
+
+    total = {"calendars": 0, "events": 0}
+
+    from app.services.google_calendar_sync import GoogleCalendarSyncService
+    for account in accounts:
+        try:
+            service = GoogleCalendarSyncService(db, account)
+            result = await service.sync_all()
+            total["calendars"] += result["calendars"]
+            total["events"] += result["events"]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Calendar sync failed for {account.email_address}: {e}")
+        finally:
+            await service.close()
+
+    return total
 
 
-@router.patch("/{calendar_id}", response_model=CalendarResponse)
-async def update_calendar(
-    calendar_id: str,
-    request: CalendarUpdate,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Update a calendar."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-
-    if request.name is not None:
-        calendar.name = request.name
-    if request.color is not None:
-        calendar.color = request.color
-    if request.sync_enabled is not None:
-        calendar.sync_enabled = request.sync_enabled
-
-    await db.commit()
-    await db.refresh(calendar)
-    return _to_calendar_response(calendar)
-
-
-@router.delete("/{calendar_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_calendar(
-    calendar_id: str,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Delete a calendar and all its events."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-    await db.delete(calendar)
-    await db.commit()
-
-
-# --- Events ---
+# --- Cross-calendar events ---
 
 @router.get("/events/all", response_model=EventListResponse)
+@router.get("/events", response_model=EventListResponse)
 async def list_all_events(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     calendar_id: Optional[str] = None,
+    expand_recurring: bool = True,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List events across all calendars with optional date range filter."""
+    """List events across all calendars with optional date range filter.
+    Recurring events are expanded into individual occurrences by default."""
     # Get user's calendar IDs
     cal_result = await db.execute(
         select(Calendar.id).where(Calendar.user_id == user.id)
@@ -141,51 +138,49 @@ async def list_all_events(
     result = await db.execute(query)
     events = result.scalars().all()
 
+    # Expand recurring events into occurrences
+    event_list = []
+    for e in events:
+        base = _to_event_response(e)
+        if e.recurrence_rule and expand_recurring and start and end:
+            occurrences = expand_rrule(
+                e.recurrence_rule,
+                e.start_at,
+                e.end_at,
+                start,
+                end,
+            )
+            # First occurrence is the original event, rest are virtual
+            for i, occ in enumerate(occurrences):
+                if i == 0:
+                    # Update the base event times
+                    event_list.append(base)
+                else:
+                    # Create virtual occurrence (same ID with suffix)
+                    virtual = EventResponse(
+                        **{**base.model_dump(), **occ},
+                        id=f"{base.id}_occ_{i}",
+                    )
+                    event_list.append(virtual)
+        else:
+            event_list.append(base)
+
     return EventListResponse(
-        events=[_to_event_response(e) for e in events],
-        total=len(events),
+        events=event_list,
+        total=len(event_list),
     )
 
 
-@router.get("/{calendar_id}/events", response_model=EventListResponse)
-async def list_calendar_events(
-    calendar_id: str,
-    start: Optional[datetime] = None,
-    end: Optional[datetime] = None,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """List events for a specific calendar."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+# --- Top-level event convenience routes (match frontend API pattern) ---
 
-    query = select(Event).where(Event.calendar_id == calendar.id)
-
-    if start:
-        query = query.where(Event.end_at >= start)
-    if end:
-        query = query.where(Event.start_at <= end)
-
-    query = query.order_by(Event.start_at)
-
-    result = await db.execute(query)
-    events = result.scalars().all()
-
-    return EventListResponse(
-        events=[_to_event_response(e) for e in events],
-        total=len(events),
-    )
-
-
-@router.post("/{calendar_id}/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
-async def create_event(
-    calendar_id: str,
+@router.post("/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
+async def create_event_toplevel(
     request: EventCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new event."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-
+    """Create a new event (calendar_id in request body)."""
+    calendar = await _get_calendar_or_404(db, user.id, request.calendar_id)
     event = Event(
         calendar_id=calendar.id,
         title=request.title,
@@ -202,30 +197,26 @@ async def create_event(
     return _to_event_response(event)
 
 
-@router.get("/{calendar_id}/events/{event_id}", response_model=EventResponse)
-async def get_event(
-    calendar_id: str,
+@router.get("/events/{event_id}", response_model=EventResponse)
+async def get_event_toplevel(
     event_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a specific event."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-    event = await _get_event_or_404(db, calendar.id, event_id)
+    """Get a specific event by ID."""
+    event = await _get_user_event_or_404(db, user.id, event_id)
     return _to_event_response(event)
 
 
-@router.patch("/{calendar_id}/events/{event_id}", response_model=EventResponse)
-async def update_event(
-    calendar_id: str,
+@router.patch("/events/{event_id}", response_model=EventResponse)
+async def update_event_toplevel(
     event_id: str,
     request: EventUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update an event."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-    event = await _get_event_or_404(db, calendar.id, event_id)
+    """Update an event by ID."""
+    event = await _get_user_event_or_404(db, user.id, event_id)
 
     if request.title is not None:
         event.title = request.title
@@ -247,18 +238,105 @@ async def update_event(
     return _to_event_response(event)
 
 
-@router.delete("/{calendar_id}/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_event(
-    calendar_id: str,
+@router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_event_toplevel(
     event_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete an event."""
-    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
-    event = await _get_event_or_404(db, calendar.id, event_id)
+    """Delete an event by ID."""
+    event = await _get_user_event_or_404(db, user.id, event_id)
     await db.delete(event)
     await db.commit()
+
+
+# --- Single calendar routes ---
+
+@router.get("/{calendar_id}", response_model=CalendarResponse)
+async def get_calendar(
+    calendar_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+    return _to_calendar_response(calendar)
+
+
+@router.patch("/{calendar_id}", response_model=CalendarResponse)
+async def update_calendar(
+    calendar_id: str,
+    request: CalendarUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+    if request.name is not None:
+        calendar.name = request.name
+    if request.color is not None:
+        calendar.color = request.color
+    if request.sync_enabled is not None:
+        calendar.sync_enabled = request.sync_enabled
+    await db.commit()
+    await db.refresh(calendar)
+    return _to_calendar_response(calendar)
+
+
+@router.delete("/{calendar_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_calendar(
+    calendar_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+    await db.delete(calendar)
+    await db.commit()
+
+
+@router.get("/{calendar_id}/events", response_model=EventListResponse)
+async def list_calendar_events(
+    calendar_id: str,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+    query = select(Event).where(Event.calendar_id == calendar.id)
+    if start:
+        query = query.where(Event.end_at >= start)
+    if end:
+        query = query.where(Event.start_at <= end)
+    query = query.order_by(Event.start_at)
+    result = await db.execute(query)
+    events = result.scalars().all()
+    return EventListResponse(
+        events=[_to_event_response(e) for e in events],
+        total=len(events),
+    )
+
+
+@router.post("/{calendar_id}/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED)
+async def create_event(
+    calendar_id: str,
+    request: EventCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    calendar = await _get_calendar_or_404(db, user.id, calendar_id)
+    event = Event(
+        calendar_id=calendar.id,
+        title=request.title,
+        description=request.description,
+        location=request.location,
+        start_at=request.start_at,
+        end_at=request.end_at,
+        all_day=request.all_day,
+        recurrence_rule=request.recurrence_rule,
+    )
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return _to_event_response(event)
 
 
 # --- Helpers ---
@@ -276,6 +354,21 @@ async def _get_calendar_or_404(db, user_id, calendar_id: str) -> Calendar:
 async def _get_event_or_404(db, calendar_id, event_id: str) -> Event:
     result = await db.execute(
         select(Event).where(Event.id == event_id, Event.calendar_id == calendar_id)
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return event
+
+
+async def _get_user_event_or_404(db, user_id, event_id: str) -> Event:
+    """Get an event by ID, verifying the user owns the calendar."""
+    cal_ids_query = select(Calendar.id).where(Calendar.user_id == user_id)
+    result = await db.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.calendar_id.in_(cal_ids_query),
+        )
     )
     event = result.scalar_one_or_none()
     if not event:
@@ -305,6 +398,7 @@ def _to_event_response(e: Event) -> EventResponse:
         end_at=e.end_at,
         all_day=e.all_day,
         recurrence_rule=e.recurrence_rule,
+        recurrence_human=rrule_to_human(e.recurrence_rule) if e.recurrence_rule else None,
         created_at=e.created_at,
         updated_at=e.updated_at,
     )

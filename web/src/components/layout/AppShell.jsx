@@ -1,17 +1,41 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
 import { Outlet } from 'react-router-dom';
 import NavRail from './NavRail';
 import StatusBar from './StatusBar';
 import ComposeModal from '../compose/ComposeModal';
 import CommandPalette from '../common/CommandPalette';
 import SearchModal from '../common/SearchModal';
+import { fetchAccounts, selectAccounts } from '../../store/accountsSlice';
+import {
+  fetchThreads,
+  selectListStatus,
+  selectUnreadCount,
+  selectLastSynced,
+  selectIsConnected,
+} from '../../store/inboxSlice';
 import styles from './AppShell.module.css';
 
 export default function AppShell() {
+  const dispatch = useDispatch();
+
   const [isComposing, setIsComposing] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [composeProps, setComposeProps] = useState({});
+
+  // Live data from Redux
+  const accounts = useSelector(selectAccounts);
+  const unreadCount = useSelector(selectUnreadCount);
+  const listStatus = useSelector(selectListStatus);
+  const lastSynced = useSelector(selectLastSynced);
+  const isConnected = useSelector(selectIsConnected);
+
+  // Fetch accounts and inbox threads on mount
+  useEffect(() => {
+    dispatch(fetchAccounts());
+    dispatch(fetchThreads({ view: 'inbox' }));
+  }, [dispatch]);
 
   const handleCompose = useCallback(() => {
     setComposeProps({});
@@ -52,7 +76,7 @@ export default function AppShell() {
     <div className={styles.shell}>
       <div className={styles.main}>
         <NavRail
-          unreadCount={0}
+          unreadCount={unreadCount}
           onCompose={handleCompose}
           onSearch={handleSearch}
         />
@@ -63,10 +87,10 @@ export default function AppShell() {
       </div>
 
       <StatusBar
-        isConnected={true}
-        isSyncing={false}
-        lastSynced={null}
-        accountCount={0}
+        isConnected={isConnected}
+        isSyncing={listStatus === 'loading'}
+        lastSynced={lastSynced}
+        accountCount={accounts.length}
       />
 
       {/* Background grid texture */}

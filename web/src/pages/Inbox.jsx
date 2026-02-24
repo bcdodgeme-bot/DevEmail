@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
+import { PenSquare } from 'lucide-react';
 import {
   fetchThreads,
   fetchThreadDetail,
@@ -37,6 +38,7 @@ const VIEW_LABELS = {
 export default function Inbox() {
   const dispatch = useDispatch();
   const location = useLocation();
+  const { threadId: urlThreadId } = useParams();
 
   const threads = useSelector(selectThreads);
   const listStatus = useSelector(selectListStatus);
@@ -58,6 +60,13 @@ export default function Inbox() {
     dispatch(fetchThreads({ view: currentView }));
   }, [currentView, dispatch]);
 
+  /* Deep-link: auto-select thread from URL param */
+  useEffect(() => {
+    if (urlThreadId && urlThreadId !== selectedId) {
+      dispatch(selectThread(urlThreadId));
+    }
+  }, [urlThreadId, selectedId, dispatch]);
+
   /* Fetch thread detail when selection changes */
   useEffect(() => {
     if (selectedId) {
@@ -70,15 +79,29 @@ export default function Inbox() {
     dispatch(selectThread(threadId));
   };
 
+  const handleCompose = () => {
+    window.dispatchEvent(new CustomEvent('devemail:compose', { detail: {} }));
+  };
+
   return (
     <div className={styles.inbox}>
       {/* Left panel — thread list */}
       <div className={styles.listPanel}>
         <div className={styles.listHeader}>
           <h2 className={styles.viewTitle}>{VIEW_LABELS[currentView]}</h2>
-          {threads.length > 0 && (
-            <span className={styles.threadCount}>{threads.length}</span>
-          )}
+          <div className={styles.listHeaderRight}>
+            {threads.length > 0 && (
+              <span className={styles.threadCount}>{threads.length}</span>
+            )}
+            <button
+              className={styles.composeBtn}
+              onClick={handleCompose}
+              title="Compose new message"
+              type="button"
+            >
+              <PenSquare size={16} />
+            </button>
+          </div>
         </div>
         <ThreadList
           threads={threads}

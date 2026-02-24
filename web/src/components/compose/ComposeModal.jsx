@@ -13,10 +13,32 @@ import AccountPicker from './AccountPicker';
 import RecipientInput from './RecipientInput';
 import styles from './ComposeModal.module.css';
 
+const AUTOSAVE_INTERVAL = 30000; // 30 seconds
+
 function stripHtml(html) {
   if (!html) return '';
   const doc = new DOMParser().parseFromString(html, 'text/html');
   return doc.body.textContent || '';
+}
+
+/**
+ * Convert plain text to simple HTML.
+ * Splits on double newlines into <p> blocks, single newlines become <br>.
+ */
+function textToHtml(text) {
+  if (!text || !text.trim()) return '';
+  // Split on double newlines to create paragraphs
+  const paragraphs = text.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => {
+      const escaped = p
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+      return `<p>${escaped}</p>`;
+    })
+    .join('');
 }
 
 export default function ComposeModal({
@@ -25,6 +47,7 @@ export default function ComposeModal({
   replyTo = null,
   replyAll = false,
   forward = null,
+  prefillTo = null,
 }) {
   const dispatch = useDispatch();
   const accounts = useSelector(selectAccounts);
@@ -36,12 +59,18 @@ export default function ComposeModal({
   const [cc, setCc] = useState([]);
   const [bcc, setBcc] = useState([]);
   const [subject, setSubject] = useState('');
-  const [bodyHtml, setBodyHtml] = useState('');
+  const [bodyText, setBodyText] = useState('');
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
+
+  // Draft tracking for auto-save
+  const [draftId, setDraftId] = useState(null);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const autosaveRef = useRef(null);
+  const dirtyRef = useRef(false);
 
   const bodyRef = useRef(null);
 
@@ -84,7 +113,7 @@ export default function ComposeModal({
       const replyName = replyTo.from_name || replyTo.latest_from_name || replyTo.from_address || replyTo.latest_from_address || '';
       const dateStr = replyDate ? new Date(replyDate).toLocaleString() : '';
       const originalText = stripHtml(replyTo.body_html || replyTo.body_text || '') || replyTo.latest_snippet || '';
-      setBodyHtml(
+      setBodyText(
         `\n\nOn ${dateStr}, ${replyName} wrote:\n> ${originalText.replace(/\n/g, '\n> ')}`
       );
     } else if (forward) {
@@ -98,15 +127,41 @@ export default function ComposeModal({
       const fwdAddr = forward.from_address || forward.latest_from_address || '';
       const fwdDateStr = fwdDate ? new Date(fwdDate).toLocaleString() : '';
       const fwdText = stripHtml(forward.body_html || forward.body_text || '') || forward.latest_snippet || '';
-      setBodyHtml(
+      setBodyText(
         `\n\n---------- Forwarded message ----------\n` +
         `From: ${fwdName} <${fwdAddr}>\n` +
         `Subject: ${forward.subject || ''}\n` +
         `Date: ${fwdDateStr}\n\n` +
         fwdText
       );
+    } else if (prefillTo) {
+      // Compose from contacts — prefill the To field
+      const recipients = Array.isArray(prefillTo) ? prefillTo : [prefillTo];
+      setTo(
+        recipients.map((r) =>
+          typeof r === 'string' ? { address: r, name: '' } : r
+        )
+      );
     }
-  }, [isOpen, replyTo, replyAll, forward]);
+  }, [isOpen, replyTo, replyAll, forward, prefillTo]);
+
+  // Mark dirty on any field change
+  useEffect(() => {
+    dirtyRef.current = true;
+  }, [to, cc, bcc, subject, bodyText]);
+
+  // Auto-save interval
+  useEffect(() => {
+    if (!isOpen) return;
+
+    autosaveRef.current = setInterval(() => {
+      if (dirtyRef.current && accountId) {
+        saveDraft(true);
+      }
+    }, AUTOSAVE_INTERVAL);
+
+    return () => clearInterval(autosaveRef.current);
+  }, [isOpen, accountId, draftId]);
 
   const handleAccountChange = useCallback(
     (newAccountId) => {
@@ -125,6 +180,44 @@ export default function ComposeModal({
     return sig?.body_html || sig?.body_text || '';
   };
 
+  /** Build the draft/send payload */
+  const buildPayload = (isDraft) => ({
+    account_id: accountId,
+    to_addresses: to,
+    cc_addresses: cc,
+    bcc_addresses: bcc,
+    subject,
+    body_html: textToHtml(bodyText),
+    body_text: bodyText,
+    signature_id: signatureId || undefined,
+    is_draft: isDraft,
+  });
+
+  /** Save draft — silent when auto=true */
+  const saveDraft = async (auto = false) => {
+    if (!accountId) return;
+    // Don't auto-save empty drafts
+    if (auto && !to.length && !subject && !bodyText) return;
+
+    try {
+      if (draftId) {
+        // Update existing draft
+        await composeAPI.updateDraft(draftId, buildPayload(true));
+      } else {
+        // Create new draft
+        const result = await composeAPI.send(buildPayload(true));
+        if (result.message_id) {
+          setDraftId(result.message_id);
+        }
+      }
+      dirtyRef.current = false;
+      setLastSavedAt(new Date());
+      if (!auto) setError(null);
+    } catch (err) {
+      if (!auto) setError(err.message || 'Failed to save draft');
+    }
+  };
+
   const handleSend = async () => {
     if (to.length === 0) {
       setError('Please add at least one recipient');
@@ -139,16 +232,7 @@ export default function ComposeModal({
     setError(null);
 
     try {
-      await composeAPI.send({
-        account_id: accountId,
-        to_addresses: to,
-        cc_addresses: cc,
-        bcc_addresses: bcc,
-        subject,
-        body_html: bodyHtml,
-        signature_id: signatureId || undefined,
-        is_draft: false,
-      });
+      await composeAPI.send(buildPayload(false));
       resetAndClose();
     } catch (err) {
       setError(err.message || 'Failed to send email');
@@ -157,39 +241,31 @@ export default function ComposeModal({
     }
   };
 
-  const handleSaveDraft = async () => {
-    if (!accountId) return;
-    setError(null);
-
-    try {
-      await composeAPI.send({
-        account_id: accountId,
-        to_addresses: to,
-        cc_addresses: cc,
-        bcc_addresses: bcc,
-        subject,
-        body_html: bodyHtml,
-        signature_id: signatureId || undefined,
-        is_draft: true,
-      });
-      resetAndClose();
-    } catch (err) {
-      setError(err.message || 'Failed to save draft');
-    }
-  };
+  const handleSaveDraft = () => saveDraft(false).then(resetAndClose);
 
   const resetAndClose = () => {
+    clearInterval(autosaveRef.current);
     setTo([]);
     setCc([]);
     setBcc([]);
     setSubject('');
-    setBodyHtml('');
+    setBodyText('');
     setShowCcBcc(false);
     setIsMinimized(false);
     setIsMaximized(false);
     setError(null);
+    setDraftId(null);
+    setLastSavedAt(null);
+    dirtyRef.current = false;
     setAccountId(defaultAccount?.id || '');
     onClose();
+  };
+
+  /** Save draft on body blur */
+  const handleBodyBlur = () => {
+    if (dirtyRef.current && accountId && (to.length || subject || bodyText)) {
+      saveDraft(true);
+    }
   };
 
   useEffect(() => {
@@ -200,8 +276,8 @@ export default function ComposeModal({
         handleSend();
       }
       if (e.key === 'Escape') {
-        if (to.length || subject || bodyHtml) {
-          handleSaveDraft();
+        if (to.length || subject || bodyText) {
+          saveDraft(false).then(resetAndClose);
         } else {
           resetAndClose();
         }
@@ -209,7 +285,7 @@ export default function ComposeModal({
     }
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isOpen, to, subject, bodyHtml, accountId]);
+  }, [isOpen, to, subject, bodyText, accountId]);
 
   if (!isOpen) return null;
 
@@ -220,7 +296,9 @@ export default function ComposeModal({
     <div
       className={`${styles.overlay} ${isMaximized ? styles.overlayMax : ''}`}
       onClick={(e) => {
-        if (e.target === e.currentTarget) handleSaveDraft();
+        if (e.target === e.currentTarget) {
+          saveDraft(false).then(resetAndClose);
+        }
       }}
     >
       <div
@@ -231,6 +309,11 @@ export default function ComposeModal({
         <div className={styles.header}>
           <span className={styles.headerTitle}>
             {replyTo ? 'Reply' : forward ? 'Forward' : 'New Message'}
+            {lastSavedAt && (
+              <span className={styles.savedHint}>
+                {' '}· Draft saved
+              </span>
+            )}
           </span>
           <div className={styles.headerActions}>
             <button
@@ -324,8 +407,9 @@ export default function ComposeModal({
               <textarea
                 ref={bodyRef}
                 className={styles.bodyInput}
-                value={bodyHtml}
-                onChange={(e) => setBodyHtml(e.target.value)}
+                value={bodyText}
+                onChange={(e) => setBodyText(e.target.value)}
+                onBlur={handleBodyBlur}
                 placeholder="Write your message..."
               />
             </div>
@@ -372,7 +456,7 @@ export default function ComposeModal({
               <div className={styles.footerRight}>
                 <button
                   className={styles.footerBtn}
-                  onClick={handleSaveDraft}
+                  onClick={() => saveDraft(false).then(resetAndClose)}
                   title="Save as draft"
                   type="button"
                 >

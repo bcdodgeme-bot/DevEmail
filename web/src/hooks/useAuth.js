@@ -10,6 +10,7 @@ import {
   logoutAll,
   fetchCurrentUser,
   clearError,
+  setOAuthCredentials,
 } from '../store/authSlice';
 
 export function useAuth() {
@@ -43,6 +44,11 @@ export function useAuth() {
     dispatch(clearError());
   };
 
+  // Handle OAuth callback — stores tokens + user from URL params into Redux and localStorage
+  const handleOAuthCallback = ({ access_token, refresh_token, user }) => {
+    dispatch(setOAuthCredentials({ access_token, refresh_token, user }));
+  };
+
   return {
     isAuthenticated,
     user,
@@ -54,5 +60,6 @@ export function useAuth() {
     logoutAll: handleLogoutAll,
     refreshUser,
     dismissError,
+    handleOAuthCallback,
   };
 }

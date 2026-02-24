@@ -1,54 +1,54 @@
-import client from './client';
-
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+import { apiFetch } from '../utils/api';
 
 export const authAPI = {
   // Local auth — email + password login
   async login(email, password) {
-    const { data } = await client.post('/auth/login', { email, password });
-    return data;
+    return apiFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
   },
 
   // Local auth — register new account
   async register(email, password, displayName = null) {
-    const { data } = await client.post('/auth/register', {
-      email,
-      password,
-      display_name: displayName,
+    return apiFetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        email,
+        password,
+        display_name: displayName,
+      }),
     });
-    return data;
   },
 
   // Google OAuth — link a Gmail account (requires auth)
   getGoogleLinkUrl() {
-    return `${API_BASE}/auth/google/login`;
+    return '/api/auth/google/login';
   },
 
   // Get current user info
   async me() {
-    const { data } = await client.get('/auth/me');
-    return data;
+    return apiFetch('/auth/me');
   },
 
   // Refresh tokens
   async refresh(refreshToken) {
-    const { data } = await client.post('/auth/refresh', {
-      refresh_token: refreshToken,
+    return apiFetch('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
-    return data;
   },
 
   // Logout (revoke single refresh token)
   async logout(refreshToken) {
-    const { data } = await client.post('/auth/logout', {
-      refresh_token: refreshToken,
+    return apiFetch('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
-    return data;
   },
 
   // Logout all sessions
   async logoutAll() {
-    const { data } = await client.post('/auth/logout-all');
-    return data;
+    return apiFetch('/auth/logout-all', { method: 'POST' });
   },
 };
