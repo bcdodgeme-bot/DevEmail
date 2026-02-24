@@ -108,12 +108,13 @@ async def google_login(
     user: User = Depends(get_current_user),
 ):
     """
-    Redirect to Google OAuth consent screen.
-    Requires auth — links a Gmail account to the current user.
-    The user's ID is passed via the state parameter.
+    Return the Google OAuth consent URL as JSON.
+    Requires auth — the frontend calls this with the JWT,
+    then redirects the browser to the returned URL.
+    The user's ID is passed via the OAuth state parameter.
     """
     url = get_google_auth_url(state=str(user.id))
-    return RedirectResponse(url=url)
+    return {"auth_url": url}
 
 
 @router.get("/google/callback")

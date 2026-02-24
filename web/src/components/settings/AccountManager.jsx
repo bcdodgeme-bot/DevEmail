@@ -17,6 +17,7 @@ import {
   unlinkAccount,
 } from '../../store/accountsSlice';
 import { getInitials, getAvatarGradient } from '../../utils/avatarColor';
+import client from '../../api/client';
 import styles from './AccountManager.module.css';
 
 export default function AccountManager() {
@@ -37,9 +38,16 @@ export default function AccountManager() {
   const [isLinking, setIsLinking] = useState(false);
   const [error, setError] = useState(null);
 
-  /* Link Gmail via OAuth redirect */
-  const handleLinkGmail = () => {
-    window.location.href = '/api/auth/google/login';
+  /* Link Gmail via OAuth — authenticated API call, then redirect to Google */
+  const handleLinkGmail = async () => {
+    try {
+      setError(null);
+      const response = await client.get('/auth/google/login');
+      const { auth_url } = response.data;
+      window.location.href = auth_url;
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to start Google OAuth');
+    }
   };
 
   /* Link Stalwart account */
@@ -105,6 +113,9 @@ export default function AccountManager() {
           Link email accounts to send and receive from DevEmail
         </p>
       </div>
+
+      {/* Error display */}
+      {error && <div className={styles.formError}>{error}</div>}
 
       {/* Existing accounts */}
       <div className={styles.accountList}>
