@@ -83,7 +83,7 @@ export default function ComposeModal({
       const replyDate = replyTo.received_at || replyTo.sent_at || replyTo.last_message_at;
       const replyName = replyTo.from_name || replyTo.latest_from_name || replyTo.from_address || replyTo.latest_from_address || '';
       const dateStr = replyDate ? new Date(replyDate).toLocaleString() : '';
-      const originalText = stripHtml(replyTo.body_html || replyTo.body_text || '');
+      const originalText = stripHtml(replyTo.body_html || replyTo.body_text || '') || replyTo.latest_snippet || '';
       setBodyHtml(
         `\n\nOn ${dateStr}, ${replyName} wrote:\n> ${originalText.replace(/\n/g, '\n> ')}`
       );
@@ -97,7 +97,7 @@ export default function ComposeModal({
       const fwdName = forward.from_name || forward.latest_from_name || '';
       const fwdAddr = forward.from_address || forward.latest_from_address || '';
       const fwdDateStr = fwdDate ? new Date(fwdDate).toLocaleString() : '';
-      const fwdText = stripHtml(forward.body_html || forward.body_text || '');
+      const fwdText = stripHtml(forward.body_html || forward.body_text || '') || forward.latest_snippet || '';
       setBodyHtml(
         `\n\n---------- Forwarded message ----------\n` +
         `From: ${fwdName} <${fwdAddr}>\n` +
