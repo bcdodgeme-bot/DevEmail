@@ -6,8 +6,6 @@ import {
   Maximize2,
   Send,
   Paperclip,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import { selectAccounts, selectDefaultAccount, fetchAccounts } from '../../store/accountsSlice';
 import { composeAPI } from '../../api/compose';
@@ -15,16 +13,12 @@ import AccountPicker from './AccountPicker';
 import RecipientInput from './RecipientInput';
 import styles from './ComposeModal.module.css';
 
-/**
- * ComposeModal — full email compose experience.
- *
- * Props:
- *   isOpen        - boolean
- *   onClose       - () => void
- *   replyTo       - optional MessageDetailResponse to pre-fill reply
- *   replyAll      - boolean, if true pre-fill all recipients
- *   forward       - optional MessageDetailResponse to pre-fill forward
- */
+function stripHtml(html) {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body.textContent || '';
+}
+
 export default function ComposeModal({
   isOpen,
   onClose,
@@ -36,7 +30,6 @@ export default function ComposeModal({
   const accounts = useSelector(selectAccounts);
   const defaultAccount = useSelector(selectDefaultAccount);
 
-  /* Form state */
   const [accountId, setAccountId] = useState('');
   const [signatureId, setSignatureId] = useState('');
   const [to, setTo] = useState([]);
@@ -52,14 +45,12 @@ export default function ComposeModal({
 
   const bodyRef = useRef(null);
 
-  /* Fetch accounts if not loaded */
   useEffect(() => {
     if (accounts.length === 0) {
       dispatch(fetchAccounts());
     }
   }, [accounts.length, dispatch]);
 
-  /* Set default account when loaded */
   useEffect(() => {
     if (defaultAccount && !accountId) {
       setAccountId(defaultAccount.id);
@@ -68,12 +59,14 @@ export default function ComposeModal({
     }
   }, [defaultAccount, accountId]);
 
-  /* Pre-fill for reply/forward */
   useEffect(() => {
     if (!isOpen) return;
 
     if (replyTo) {
-      setTo([{ address: replyTo.from_address, name: replyTo.from_name }]);
+      setTo([{
+        address: replyTo.from_address || replyTo.latest_from_address || '',
+        name: replyTo.from_name || replyTo.latest_from_name || '',
+      }]);
       setSubject(
         replyTo.subject?.startsWith('Re:')
           ? replyTo.subject
@@ -83,15 +76,16 @@ export default function ComposeModal({
         const allRecipients = [
           ...(replyTo.to_addresses || []),
           ...(replyTo.cc_addresses || []),
-        ].filter((r) => r.address !== replyTo.from_address);
+        ].filter((r) => r.address !== (replyTo.from_address || replyTo.latest_from_address));
         setCc(allRecipients);
         setShowCcBcc(allRecipients.length > 0);
       }
+      const replyDate = replyTo.received_at || replyTo.sent_at || replyTo.last_message_at;
+      const replyName = replyTo.from_name || replyTo.latest_from_name || replyTo.from_address || replyTo.latest_from_address || '';
+      const dateStr = replyDate ? new Date(replyDate).toLocaleString() : '';
+      const originalText = stripHtml(replyTo.body_html || replyTo.body_text || '');
       setBodyHtml(
-        `<br/><br/><div style="border-left:2px solid #64748b;padding-left:12px;color:#64748b;">` +
-        `<p>On ${new Date(replyTo.received_at || replyTo.sent_at).toLocaleString()}, ` +
-        `${replyTo.from_name || replyTo.from_address} wrote:</p>` +
-        `${replyTo.body_html || replyTo.body_text || ''}</div>`
+        `\n\nOn ${dateStr}, ${replyName} wrote:\n> ${originalText.replace(/\n/g, '\n> ')}`
       );
     } else if (forward) {
       setSubject(
@@ -99,17 +93,21 @@ export default function ComposeModal({
           ? forward.subject
           : `Fwd: ${forward.subject || ''}`
       );
+      const fwdDate = forward.received_at || forward.sent_at || forward.last_message_at;
+      const fwdName = forward.from_name || forward.latest_from_name || '';
+      const fwdAddr = forward.from_address || forward.latest_from_address || '';
+      const fwdDateStr = fwdDate ? new Date(fwdDate).toLocaleString() : '';
+      const fwdText = stripHtml(forward.body_html || forward.body_text || '');
       setBodyHtml(
-        `<br/><br/>---------- Forwarded message ----------<br/>` +
-        `From: ${forward.from_name || ''} &lt;${forward.from_address || ''}&gt;<br/>` +
-        `Subject: ${forward.subject || ''}<br/>` +
-        `Date: ${new Date(forward.received_at || forward.sent_at).toLocaleString()}<br/><br/>` +
-        `${forward.body_html || forward.body_text || ''}`
+        `\n\n---------- Forwarded message ----------\n` +
+        `From: ${fwdName} <${fwdAddr}>\n` +
+        `Subject: ${forward.subject || ''}\n` +
+        `Date: ${fwdDateStr}\n\n` +
+        fwdText
       );
     }
   }, [isOpen, replyTo, replyAll, forward]);
 
-  /* Handle account switch — update signature */
   const handleAccountChange = useCallback(
     (newAccountId) => {
       setAccountId(newAccountId);
@@ -120,7 +118,6 @@ export default function ComposeModal({
     [accounts]
   );
 
-  /* Get current signature HTML */
   const getCurrentSignature = () => {
     if (!signatureId || !accountId) return '';
     const account = accounts.find((a) => a.id === accountId);
@@ -128,7 +125,6 @@ export default function ComposeModal({
     return sig?.body_html || sig?.body_text || '';
   };
 
-  /* Send email */
   const handleSend = async () => {
     if (to.length === 0) {
       setError('Please add at least one recipient');
@@ -161,7 +157,6 @@ export default function ComposeModal({
     }
   };
 
-  /* Save as draft */
   const handleSaveDraft = async () => {
     if (!accountId) return;
     setError(null);
@@ -183,7 +178,6 @@ export default function ComposeModal({
     }
   };
 
-  /* Reset form and close */
   const resetAndClose = () => {
     setTo([]);
     setCc([]);
@@ -198,7 +192,6 @@ export default function ComposeModal({
     onClose();
   };
 
-  /* Keyboard shortcut: Cmd+Enter to send */
   useEffect(() => {
     if (!isOpen) return;
     function handleKey(e) {
@@ -235,7 +228,6 @@ export default function ComposeModal({
           isMinimized ? styles.minimized : ''
         } ${isMaximized ? styles.maximized : ''}`}
       >
-        {/* Header */}
         <div className={styles.header}>
           <span className={styles.headerTitle}>
             {replyTo ? 'Reply' : forward ? 'Forward' : 'New Message'}
@@ -270,7 +262,6 @@ export default function ComposeModal({
 
         {!isMinimized && (
           <>
-            {/* Account Picker — "Send From" */}
             <div className={styles.row}>
               <AccountPicker
                 accounts={accounts}
@@ -279,7 +270,6 @@ export default function ComposeModal({
               />
             </div>
 
-            {/* Recipients */}
             <div className={styles.row}>
               <RecipientInput
                 label="To"
@@ -319,7 +309,6 @@ export default function ComposeModal({
               </>
             )}
 
-            {/* Subject */}
             <div className={styles.row}>
               <span className={styles.fieldLabel}>Subj</span>
               <input
@@ -331,7 +320,6 @@ export default function ComposeModal({
               />
             </div>
 
-            {/* Body */}
             <div className={styles.body}>
               <textarea
                 ref={bodyRef}
@@ -342,7 +330,6 @@ export default function ComposeModal({
               />
             </div>
 
-            {/* Signature preview */}
             {signatures.length > 0 && (
               <div className={styles.signatureBar}>
                 <label className={styles.sigLabel}>
@@ -369,10 +356,8 @@ export default function ComposeModal({
               </div>
             )}
 
-            {/* Error */}
             {error && <div className={styles.error}>{error}</div>}
 
-            {/* Footer */}
             <div className={styles.footer}>
               <button
                 className={styles.sendButton}

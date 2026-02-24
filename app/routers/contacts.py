@@ -35,12 +35,13 @@ async def list_contacts(
 
     # Search by name, email, company
     if search:
+        from sqlalchemy import Text
         search_filter = or_(
             Contact.display_name.ilike(f"%{search}%"),
             Contact.first_name.ilike(f"%{search}%"),
             Contact.last_name.ilike(f"%{search}%"),
             Contact.company.ilike(f"%{search}%"),
-            Contact.emails.cast(str).ilike(f"%{search}%"),
+            Contact.emails.cast(Text).ilike(f"%{search}%"),
         )
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
