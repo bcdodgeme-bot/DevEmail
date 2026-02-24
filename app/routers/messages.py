@@ -538,7 +538,7 @@ async def search_messages(
     )
 
 
-# --- Compose (placeholder until send services are built) ---
+# --- Compose ---
 
 @router.post("/compose", status_code=status.HTTP_201_CREATED)
 async def compose_message(
@@ -546,11 +546,9 @@ async def compose_message(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Compose a new message or save as draft.
+    """Compose a new message — saves as draft or sends via SMTP/Gmail."""
+    from app.services.email_send import EmailSendService
 
-    NOTE: Actual sending will be implemented when gmail_sync
-    and stalwart_sync services are built. For now this saves drafts.
-    """
     # Verify account belongs to user
     result = await db.execute(
         select(Account).where(Account.id == request.account_id, Account.user_id == user.id)
@@ -559,68 +557,88 @@ async def compose_message(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    # Create or find thread
-    thread = None
-    if request.in_reply_to_message_id:
-        # Find the original message's thread
-        orig_result = await db.execute(
-            select(Message).where(Message.id == request.in_reply_to_message_id)
-        )
-        orig_msg = orig_result.scalar_one_or_none()
-        if orig_msg:
-            thread_result = await db.execute(
-                select(Thread).where(Thread.id == orig_msg.thread_id)
+    if request.is_draft:
+        # Just save as draft (existing logic)
+        thread = None
+        if request.in_reply_to_message_id:
+            orig_result = await db.execute(
+                select(Message).where(Message.id == request.in_reply_to_message_id)
             )
-            thread = thread_result.scalar_one_or_none()
+            orig_msg = orig_result.scalar_one_or_none()
+            if orig_msg:
+                thread_result = await db.execute(
+                    select(Thread).where(Thread.id == orig_msg.thread_id)
+                )
+                thread = thread_result.scalar_one_or_none()
 
-    if not thread:
-        thread = Thread(
-            user_id=user.id,
+        if not thread:
+            thread = Thread(
+                user_id=user.id,
+                subject=request.subject,
+                message_count=0,
+            )
+            db.add(thread)
+            await db.flush()
+
+        message = Message(
+            thread_id=thread.id,
+            account_id=account.id,
+            from_address=account.email_address,
+            from_name=account.display_name,
+            to_addresses=[a.model_dump() for a in request.to_addresses],
+            cc_addresses=[a.model_dump() for a in request.cc_addresses],
+            bcc_addresses=[a.model_dump() for a in request.bcc_addresses],
             subject=request.subject,
-            message_count=0,
+            body_html=request.body_html,
+            body_text=request.body_text,
+            is_draft=True,
+            is_read=True,
         )
-        db.add(thread)
-        await db.flush()
-
-    # Create message
-    message = Message(
-        thread_id=thread.id,
-        account_id=account.id,
-        from_address=account.email_address,
-        from_name=account.display_name,
-        to_addresses=[a.model_dump() for a in request.to_addresses],
-        cc_addresses=[a.model_dump() for a in request.cc_addresses],
-        bcc_addresses=[a.model_dump() for a in request.bcc_addresses],
-        subject=request.subject,
-        body_html=request.body_html,
-        body_text=request.body_text,
-        is_draft=True,  # Always save as draft first
-        is_read=True,
-        read_receipt_requested=request.read_receipt_requested,
-        in_reply_to=request.in_reply_to_message_id,
-    )
-    db.add(message)
-
-    # Update thread
-    thread.message_count += 1
-    thread.last_message_at = message.sent_at or message.created_at
-
-    await db.commit()
-    await db.refresh(message)
-
-    if not request.is_draft:
-        # TODO: Queue actual send via gmail_sync or stalwart SMTP
-        # For now, mark as sent
-        message.is_draft = False
-        message.is_sent = True
+        db.add(message)
+        thread.message_count += 1
+        thread.last_message_at = message.sent_at or message.created_at
         await db.commit()
+        await db.refresh(message)
 
-    return {
-        "message_id": str(message.id),
-        "thread_id": str(thread.id),
-        "status": "draft" if request.is_draft else "queued",
-    }
+        return {
+            "message_id": str(message.id),
+            "thread_id": str(thread.id),
+            "status": "draft",
+        }
+    else:
+        # Actually send the email
+        sender = EmailSendService(db, account)
 
+        # Look up in_reply_to header if replying
+        in_reply_to_header = None
+        references_header = None
+        if request.in_reply_to_message_id:
+            orig_result = await db.execute(
+                select(Message).where(Message.id == request.in_reply_to_message_id)
+            )
+            orig_msg = orig_result.scalar_one_or_none()
+            if orig_msg:
+                in_reply_to_header = orig_msg.message_id_header
+                references_header = orig_msg.references
+
+        result = await sender.send(
+            to=[a.model_dump() for a in request.to_addresses],
+            subject=request.subject,
+            body_html=request.body_html,
+            body_text=request.body_text,
+            cc=[a.model_dump() for a in request.cc_addresses],
+            bcc=[a.model_dump() for a in request.bcc_addresses],
+            in_reply_to=in_reply_to_header,
+            references=references_header,
+            signature_id=request.signature_id if hasattr(request, 'signature_id') else None,
+            read_receipt=request.read_receipt_requested,
+        )
+
+        return {
+            "message_id": result["message_id"],
+            "thread_id": "",
+            "status": "sent",
+        }
 
 # --- Helpers ---
 
