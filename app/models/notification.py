@@ -5,7 +5,7 @@ Notification model — stores in-app notifications.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Boolean, Text, ForeignKey, DateTime
+from sqlalchemy import Column, String, Boolean, Text, ForeignKey, DateTime, Integer, Time
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -35,12 +35,11 @@ class NotificationPreference(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
 
     notify_new_email = Column(Boolean, default=True)
-    notify_calendar = Column(Boolean, default=True)
-    email_notifications = Column(Boolean, default=False)
-    reminder_minutes = Column(String(10), default="15")  # minutes before event
+    notify_calendar_reminder = Column(Boolean, default=True)
+    reminder_minutes_before = Column(Integer, default=15)
 
-    quiet_start = Column(String(5), nullable=True)  # "22:00"
-    quiet_end = Column(String(5), nullable=True)    # "07:00"
+    quiet_hours_start = Column(Time, nullable=True)
+    quiet_hours_end = Column(Time, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
