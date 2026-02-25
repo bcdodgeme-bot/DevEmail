@@ -156,11 +156,10 @@ async def list_all_events(
                     # Update the base event times
                     event_list.append(base)
                 else:
-                    # Create virtual occurrence (same ID with suffix)
-                    virtual = EventResponse(
-                        **{**base.model_dump(), **occ},
-                        id=f"{base.id}_occ_{i}",
-                    )
+                    ## Create virtual occurrence (same ID with suffix)
+                    merged = {**base.model_dump(), **occ}
+                    merged["id"] = f"{base.id}_occ_{i}"
+                    virtual = EventResponse(**merged)
                     event_list.append(virtual)
         else:
             event_list.append(base)
