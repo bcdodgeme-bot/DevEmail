@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, Text, ForeignKey, DateTime
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.database import Base
@@ -43,3 +44,4 @@ class NotificationPreference(Base):
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    user = relationship("User", back_populates="notification_preferences")
