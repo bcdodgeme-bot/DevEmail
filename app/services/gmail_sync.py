@@ -124,7 +124,7 @@ class GmailSyncService:
 
     # --- Message Sync ---
 
-    async def sync_messages(self, max_results: int = 100, query: str = None) -> int:
+    async def sync_messages(self, max_results: int = 500, query: str = None) -> int:
         """
         Fetch messages from Gmail and store locally.
 
@@ -135,21 +135,34 @@ class GmailSyncService:
         Returns:
             Number of new messages synced
         """
-        # Get message ID list from Gmail
-        params = {"maxResults": max_results}
-        if query:
-            params["q"] = query
+        # Get message ID list from Gmail (with pagination)
+        all_message_refs = []
+        page_token = None
+        remaining = max_results
 
-        data = await self._request("GET", f"{GMAIL_API}/messages", params=params)
-        message_refs = data.get("messages", [])
+        while remaining > 0:
+            params = {"maxResults": min(remaining, 100)}
+            if query:
+                params["q"] = query
+            if page_token:
+                params["pageToken"] = page_token
 
-        if not message_refs:
+            data = await self._request("GET", f"{GMAIL_API}/messages", params=params)
+            message_refs = data.get("messages", [])
+            all_message_refs.extend(message_refs)
+            remaining -= len(message_refs)
+
+            page_token = data.get("nextPageToken")
+            if not page_token or not message_refs:
+                break
+
+        if not all_message_refs:
             logger.info(f"No new messages for {self.account.email_address}")
             return 0
 
         new_count = 0
 
-        for ref in message_refs:
+        for ref in all_message_refs:
             gmail_id = ref["id"]
 
             # Skip if we already have this message
@@ -261,6 +274,7 @@ class GmailSyncService:
             account_id=self.account.id,
             folder_id=folder_id,
             remote_id=gmail_id,
+            remote_thread_id=gmail_thread_id,
             message_id_header=message_id_header,
             in_reply_to=in_reply_to,
             references=references,
@@ -334,35 +348,39 @@ class GmailSyncService:
 
     async def _resolve_thread(self, gmail_thread_id: str, subject: str, received_at) -> Thread:
         """Find or create a local thread for a Gmail thread ID."""
-        # Check if we already have messages from this Gmail thread
+        # First: look for existing messages from the same Gmail thread
+        # Gmail groups messages by threadId, so if we already have a message
+        # from this Gmail thread, reuse that local thread
         if gmail_thread_id:
             result = await self.db.execute(
-                select(Message.thread_id).where(
+                select(Message).where(
                     Message.account_id == self.account.id,
-                    Message.remote_id.like(f"%"),  # Any message from this account
+                    Message.remote_thread_id == gmail_thread_id,
                 ).limit(1)
             )
-            # Look up by checking existing messages with same Gmail thread
-            # We store gmail thread ID correlation via messages in the same thread
-            existing = await self.db.execute(
-                select(Thread).join(Message).where(
-                    Message.account_id == self.account.id,
-                ).order_by(Thread.created_at.desc()).limit(1)
-            )
+            existing_msg = result.scalar_one_or_none()
+            if existing_msg:
+                thread_result = await self.db.execute(
+                    select(Thread).where(Thread.id == existing_msg.thread_id)
+                )
+                thread = thread_result.scalar_one_or_none()
+                if thread:
+                    return thread
 
-        # For now, try to match by subject (simplified thread matching)
-        # TODO: Improve with proper Gmail thread ID tracking
+        # Fallback: match by cleaned subject
         if subject:
-            clean_subject = subject.lstrip("Re: ").lstrip("Fwd: ").strip()
-            result = await self.db.execute(
-                select(Thread).where(
-                    Thread.user_id == self.account.user_id,
-                    Thread.subject == clean_subject,
-                ).order_by(Thread.created_at.desc()).limit(1)
-            )
-            thread = result.scalar_one_or_none()
-            if thread:
-                return thread
+            import re
+            clean_subject = re.sub(r'^(Re|Fwd|Fw):\s*', '', subject, flags=re.IGNORECASE).strip()
+            if clean_subject:
+                result = await self.db.execute(
+                    select(Thread).where(
+                        Thread.user_id == self.account.user_id,
+                        Thread.subject == clean_subject,
+                    ).order_by(Thread.created_at.desc()).limit(1)
+                )
+                thread = result.scalar_one_or_none()
+                if thread:
+                    return thread
 
         # Create new thread
         thread = Thread(

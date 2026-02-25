@@ -101,7 +101,8 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   z-index: var(--z-dropdown);
-  overflow: hidden;
+  max-height: 300px;
+  overflow-y: auto;
   animation: dropIn 150ms ease;
 }
 

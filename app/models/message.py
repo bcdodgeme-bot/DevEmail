@@ -14,6 +14,7 @@ class Message(Base):
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     folder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
     remote_id: Mapped[str | None] = mapped_column(String)
+    remote_thread_id: Mapped[str | None] = mapped_column(String, index=True)
     message_id_header: Mapped[str | None] = mapped_column(String)
     in_reply_to: Mapped[str | None] = mapped_column(String)
     references: Mapped[str | None] = mapped_column("references", String)

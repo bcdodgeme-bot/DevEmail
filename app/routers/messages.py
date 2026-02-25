@@ -75,6 +75,16 @@ async def get_inbox(
         query = query.where(unread_filter)
         count_query = count_query.where(unread_filter)
 
+    # Exclude threads where ALL messages are trashed
+    active_msg_filter = Thread.id.in_(
+        select(Message.thread_id).where(
+            Message.is_trashed == False,
+            Message.is_archived == False,
+        )
+    )
+    query = query.where(active_msg_filter)
+    count_query = count_query.where(active_msg_filter)
+
     # Exclude snoozed threads (unless snoozed_until has passed)
     query = query.where(
         or_(
