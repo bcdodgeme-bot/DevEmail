@@ -129,7 +129,9 @@ async def list_all_events(
     if calendar_id:
         query = query.where(Event.calendar_id == calendar_id)
     if start:
-        query = query.where(Event.end_at >= start)
+        query = query.where(
+            (Event.end_at >= start) | (Event.recurrence_rule.isnot(None))
+        )
     if end:
         query = query.where(Event.start_at <= end)
 
