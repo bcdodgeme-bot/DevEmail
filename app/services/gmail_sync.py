@@ -303,11 +303,6 @@ class GmailSyncService:
         if has_attachments:
             await self._store_attachment_metadata(message, payload)
 
-        # Check for unsubscribe header
-        unsub = headers.get("list-unsubscribe")
-        if unsub:
-            await self._store_unsubscribe(message, unsub, headers.get("list-id"))
-
         # Update thread
         thread.message_count += 1
         if not thread.last_message_at or (received_at and received_at > thread.last_message_at):
@@ -315,7 +310,18 @@ class GmailSyncService:
         if is_starred:
             thread.is_starred = True
 
+        # Commit the message, attachments, and thread update first
         await self.db.commit()
+
+        # Check for unsubscribe header (non-fatal — don't let this kill the sync)
+        unsub = headers.get("list-unsubscribe")
+        if unsub:
+            try:
+                await self._store_unsubscribe(message, unsub, headers.get("list-id"))
+                await self.db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to store unsubscribe link for {gmail_id}: {e}")
+                await self.db.rollback()
 
     async def _resolve_folder(self, label_ids: list[str]) -> Optional[str]:
         """Map Gmail label IDs to a local folder ID."""
