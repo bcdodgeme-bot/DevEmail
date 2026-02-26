@@ -1,6 +1,7 @@
 /* ── Thread list container ── */
 .list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(139, 92, 246, 0.2) transparent;
