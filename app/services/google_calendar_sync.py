@@ -3,6 +3,10 @@ Google Calendar Sync Service
 
 Syncs calendars and events from Google Calendar API
 into the local database using OAuth tokens.
+
+Includes cross-account deduplication: if the same calendar
+(by remote_id) already exists for this user under a different
+account, it is skipped to prevent duplicate events.
 """
 
 import logging
@@ -65,7 +69,7 @@ class GoogleCalendarSyncService:
         await self.db.commit()
 
     async def sync_calendars(self) -> list[Calendar]:
-        """Sync calendar list from Google."""
+        """Sync calendar list from Google, with cross-account dedup."""
         data = await self._request("GET", f"{GCAL_API}/users/me/calendarList")
         items = data.get("items", [])
         synced = []
@@ -75,6 +79,7 @@ class GoogleCalendarSyncService:
             name = item.get("summary", "Untitled")
             color = item.get("backgroundColor")
 
+            # Check if this calendar already exists for THIS account
             result = await self.db.execute(
                 select(Calendar).where(
                     Calendar.account_id == self.account.id,
@@ -84,19 +89,41 @@ class GoogleCalendarSyncService:
             calendar = result.scalar_one_or_none()
 
             if calendar:
+                # Already exists under this account — update name/color
                 calendar.name = name
                 calendar.color = color
-            else:
-                calendar = Calendar(
-                    user_id=self.account.user_id,
-                    account_id=self.account.id,
-                    name=name,
-                    color=color,
-                    remote_id=gcal_id,
-                    sync_enabled=True,
-                )
-                self.db.add(calendar)
+                synced.append(calendar)
+                continue
 
+            # DEDUP CHECK: Does this calendar already exist for this USER
+            # under a DIFFERENT account? If so, skip it.
+            result = await self.db.execute(
+                select(Calendar).where(
+                    Calendar.user_id == self.account.user_id,
+                    Calendar.remote_id == gcal_id,
+                )
+            )
+            existing_for_user = result.scalar_one_or_none()
+
+            if existing_for_user:
+                # Already synced via another account — skip
+                logger.info(
+                    f"Skipping calendar '{name}' ({gcal_id}) for "
+                    f"{self.account.email_address} — already synced under "
+                    f"account {existing_for_user.account_id}"
+                )
+                continue
+
+            # Brand new calendar — create it
+            calendar = Calendar(
+                user_id=self.account.user_id,
+                account_id=self.account.id,
+                name=name,
+                color=color,
+                remote_id=gcal_id,
+                sync_enabled=True,
+            )
+            self.db.add(calendar)
             synced.append(calendar)
 
         await self.db.commit()
@@ -170,6 +197,33 @@ class GoogleCalendarSyncService:
                     rrule = r
                     break
 
+            # Extract rich fields
+            attendees_raw = item.get("attendees", [])
+            attendees = [
+                {
+                    "name": a.get("displayName", ""),
+                    "email": a.get("email", ""),
+                    "response_status": a.get("responseStatus", "needsAction"),
+                }
+                for a in attendees_raw
+            ]
+
+            organizer = item.get("organizer", {})
+            organizer_name = organizer.get("displayName")
+            organizer_email = organizer.get("email")
+
+            # Conference / Google Meet link
+            conference_link = None
+            conference_data = item.get("conferenceData")
+            if conference_data:
+                entry_points = conference_data.get("entryPoints", [])
+                for ep in entry_points:
+                    if ep.get("entryPointType") == "video":
+                        conference_link = ep.get("uri")
+                        break
+
+            html_link = item.get("htmlLink")
+
             # Check if we already have this event
             result = await self.db.execute(
                 select(Event).where(
@@ -180,6 +234,7 @@ class GoogleCalendarSyncService:
             event = result.scalar_one_or_none()
 
             if event:
+                # Update existing event
                 event.title = item.get("summary", "Untitled")
                 event.description = item.get("description")
                 event.location = item.get("location")
@@ -187,7 +242,14 @@ class GoogleCalendarSyncService:
                 event.end_at = end_at
                 event.all_day = all_day
                 event.recurrence_rule = rrule
+                event.attendees = attendees
+                event.organizer_name = organizer_name
+                event.organizer_email = organizer_email
+                event.conference_link = conference_link
+                event.html_link = html_link
+                event.event_status = status
             else:
+                # Create new event
                 event = Event(
                     calendar_id=calendar.id,
                     title=item.get("summary", "Untitled"),
@@ -198,6 +260,12 @@ class GoogleCalendarSyncService:
                     all_day=all_day,
                     recurrence_rule=rrule,
                     remote_id=gcal_event_id,
+                    attendees=attendees,
+                    organizer_name=organizer_name,
+                    organizer_email=organizer_email,
+                    conference_link=conference_link,
+                    html_link=html_link,
+                    event_status=status,
                 )
                 self.db.add(event)
                 new_count += 1
@@ -231,8 +299,6 @@ def _parse_gcal_datetime(data: dict) -> Optional[datetime]:
     try:
         # dateTime format: 2024-01-15T10:00:00-05:00
         if "T" in dt_str:
-            from datetime import datetime as dt
-            # Python's fromisoformat handles timezone offsets
             return datetime.fromisoformat(dt_str)
         else:
             # date format: 2024-01-15 (all-day event)

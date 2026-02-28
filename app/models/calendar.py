@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import String, Boolean, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -39,6 +39,14 @@ class Event(Base):
     remote_id: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Rich event fields from Google Calendar
+    attendees: Mapped[list | None] = mapped_column(JSONB, default=list)
+    organizer_name: Mapped[str | None] = mapped_column(String(255))
+    organizer_email: Mapped[str | None] = mapped_column(String(255))
+    conference_link: Mapped[str | None] = mapped_column(String(1000))
+    html_link: Mapped[str | None] = mapped_column(String(1000))
+    event_status: Mapped[str | None] = mapped_column(String(50), default="confirmed")
 
     # Relationships
     calendar = relationship("Calendar", back_populates="events")

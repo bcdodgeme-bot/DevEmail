@@ -35,6 +35,14 @@ class CalendarListResponse(BaseModel):
     total: int
 
 
+# --- Attendees ---
+
+class AttendeeInfo(BaseModel):
+    name: Optional[str] = None
+    email: str
+    response_status: Optional[str] = None  # accepted, declined, tentative, needsAction
+
+
 # --- Events ---
 
 class EventCreate(BaseModel):
@@ -68,9 +76,17 @@ class EventResponse(BaseModel):
     end_at: Optional[datetime] = None
     all_day: bool
     recurrence_rule: Optional[str] = None
+    recurrence_human: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    recurrence_human: Optional[str] = None
+
+    # Rich fields
+    attendees: Optional[List[AttendeeInfo]] = None
+    organizer_name: Optional[str] = None
+    organizer_email: Optional[str] = None
+    conference_link: Optional[str] = None
+    html_link: Optional[str] = None
+    event_status: Optional[str] = None
 
     class Config:
         from_attributes = True
