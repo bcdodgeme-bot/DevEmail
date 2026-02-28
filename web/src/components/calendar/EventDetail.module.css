@@ -281,9 +281,17 @@
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: var(--leading-relaxed);
-  white-space: pre-wrap;
   margin: 0;
   padding-left: calc(14px + var(--space-3));
+}
+
+.description a {
+  color: var(--accent-purple);
+  text-decoration: none;
+}
+
+.description a:hover {
+  text-decoration: underline;
 }
 
 /* === GOOGLE CALENDAR LINK === */

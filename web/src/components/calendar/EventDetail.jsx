@@ -7,9 +7,26 @@ import {
   Edit3,
   Trash2,
   X,
+  Users,
+  Video,
+  User,
+  ExternalLink,
+  CheckCircle,
+  XCircle,
+  HelpCircle,
+  MinusCircle,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import DOMPurify from 'dompurify';
 import styles from './EventDetail.module.css';
+
+/** Map Google Calendar response status to icon + label */
+const STATUS_MAP = {
+  accepted: { icon: CheckCircle, label: 'Accepted', className: 'statusAccepted' },
+  declined: { icon: XCircle, label: 'Declined', className: 'statusDeclined' },
+  tentative: { icon: HelpCircle, label: 'Maybe', className: 'statusTentative' },
+  needsAction: { icon: MinusCircle, label: 'Pending', className: 'statusPending' },
+};
 
 export default function EventDetail({
   event,
@@ -37,13 +54,23 @@ export default function EventDetail({
   };
 
   const calColor = calendar?.color || 'var(--accent-purple)';
+  const attendees = event.attendees || [];
+  const hasConference = !!event.conference_link;
+  const hasOrganizer = event.organizer_name || event.organizer_email;
 
   return (
     <div className={styles.container}>
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerTop}>
-          <span className={styles.colorDot} style={{ background: calColor }} />
+          <div className={styles.headerLeft}>
+            <span className={styles.colorDot} style={{ background: calColor }} />
+            {event.event_status && event.event_status !== 'confirmed' && (
+              <span className={styles.statusBadge}>
+                {event.event_status}
+              </span>
+            )}
+          </div>
           <div className={styles.headerActions}>
             <button
               className={styles.actionBtn}
@@ -97,6 +124,22 @@ export default function EventDetail({
           <span className={styles.fieldPrimary}>{formatEventTime()}</span>
         </div>
 
+        {/* Google Meet / Conference Link */}
+        {hasConference && (
+          <div className={styles.field}>
+            <Video size={14} className={styles.fieldIcon} />
+            <a
+              href={event.conference_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.conferenceLink}
+            >
+              Join video call
+              <ExternalLink size={12} />
+            </a>
+          </div>
+        )}
+
         {/* Location */}
         {event.location && (
           <div className={styles.field}>
@@ -116,11 +159,67 @@ export default function EventDetail({
           </div>
         )}
 
+        {/* Organizer */}
+        {hasOrganizer && (
+          <div className={styles.field}>
+            <User size={14} className={styles.fieldIcon} />
+            <div className={styles.fieldContent}>
+              <span className={styles.fieldPrimary}>
+                {event.organizer_name || event.organizer_email}
+              </span>
+              {event.organizer_name && event.organizer_email && (
+                <span className={styles.fieldSecondary}>
+                  {event.organizer_email}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Recurrence */}
         {event.recurrence_rule && (
           <div className={styles.field}>
             <Repeat size={14} className={styles.fieldIcon} />
-            <span className={styles.fieldPrimary}>{event.recurrence_rule}</span>
+            <span className={styles.fieldPrimary}>
+              {event.recurrence_human || event.recurrence_rule}
+            </span>
+          </div>
+        )}
+
+        {/* Attendees */}
+        {attendees.length > 0 && (
+          <div className={styles.attendeesSection}>
+            <div className={styles.attendeesHeader}>
+              <Users size={14} className={styles.fieldIcon} />
+              <span className={styles.sectionLabel}>
+                Attendees ({attendees.length})
+              </span>
+            </div>
+            <ul className={styles.attendeeList}>
+              {attendees.map((a, idx) => {
+                const statusInfo = STATUS_MAP[a.response_status] || STATUS_MAP.needsAction;
+                const StatusIcon = statusInfo.icon;
+                return (
+                  <li key={idx} className={styles.attendeeItem}>
+                    <StatusIcon
+                      size={14}
+                      className={`${styles.attendeeStatus} ${styles[statusInfo.className]}`}
+                    />
+                    <div className={styles.attendeeInfo}>
+                      <span className={styles.attendeeName}>
+                        {a.name || a.email}
+                      </span>
+                      {a.name && (
+                        <span className={styles.attendeeEmail}>{a.email}</span>
+                      )}
+                    </div>
+                    <span className={styles.attendeeLabel}>
+                      {statusInfo.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
 
@@ -129,10 +228,31 @@ export default function EventDetail({
           <div className={styles.descSection}>
             <div className={styles.descHeader}>
               <AlignLeft size={14} className={styles.fieldIcon} />
-              <span className={styles.descLabel}>Description</span>
+              <span className={styles.sectionLabel}>Description</span>
             </div>
-            <p className={styles.description}>{event.description}</p>
+            <div
+              className={styles.description}
+              dangerouslySetInnerHTML={{
+                __html: DOMPurify.sanitize(event.description, {
+                  ALLOWED_TAGS: ['a', 'b', 'strong', 'i', 'em', 'br', 'p', 'ul', 'ol', 'li', 'span'],
+                  ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+                }),
+              }}
+            />
           </div>
+        )}
+
+        {/* View in Google Calendar */}
+        {event.html_link && (
+          <a
+            href={event.html_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.googleLink}
+          >
+            <ExternalLink size={14} />
+            View in Google Calendar
+          </a>
         )}
 
         {/* Meta */}

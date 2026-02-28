@@ -178,6 +178,21 @@ class GoogleCalendarSyncService:
                     await self.db.delete(existing)
                 continue
 
+            # Skip events with "Cancelled:" or "Canceled:" in title
+            event_title = item.get("summary", "Untitled")
+            if event_title.lower().startswith("cancelled:") or event_title.lower().startswith("canceled:"):
+                # Remove locally if we previously synced it
+                result = await self.db.execute(
+                    select(Event).where(
+                        Event.calendar_id == calendar.id,
+                        Event.remote_id == gcal_event_id,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    await self.db.delete(existing)
+                continue
+
             # Parse times
             start_data = item.get("start", {})
             end_data = item.get("end", {})
@@ -235,7 +250,7 @@ class GoogleCalendarSyncService:
 
             if event:
                 # Update existing event
-                event.title = item.get("summary", "Untitled")
+                event.title = event_title
                 event.description = item.get("description")
                 event.location = item.get("location")
                 event.start_at = start_at
@@ -252,7 +267,7 @@ class GoogleCalendarSyncService:
                 # Create new event
                 event = Event(
                     calendar_id=calendar.id,
-                    title=item.get("summary", "Untitled"),
+                    title=event_title,
                     description=item.get("description"),
                     location=item.get("location"),
                     start_at=start_at,
