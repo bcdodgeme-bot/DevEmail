@@ -6,7 +6,7 @@ import { apiFetch } from '../utils/api';
 /** Fetch thread list for any view (inbox, sent, drafts, trash) */
 export const fetchThreads = createAsyncThunk(
   'inbox/fetchThreads',
-  async ({ view = 'inbox', page = 1, perPage = 200 } = {}) => {
+  async ({ view = 'inbox', page = 1, perPage = 2000 } = {}) => {
     const endpoint = `/messages/${view}`;
     const params = new URLSearchParams({ page, per_page: perPage });
     return apiFetch(`${endpoint}?${params}`);

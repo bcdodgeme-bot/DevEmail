@@ -34,7 +34,7 @@ router = APIRouter(prefix="/messages", tags=["messages"])
 @router.get("/inbox", response_model=ThreadListResponse)
 async def get_inbox(
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=2000),
     account_id: Optional[str] = None,
     folder_id: Optional[str] = None,
     starred_only: bool = False,
@@ -121,7 +121,7 @@ async def get_inbox(
 @router.get("/drafts", response_model=ThreadListResponse)
 async def get_drafts(
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=2000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -159,7 +159,7 @@ async def get_drafts(
 @router.get("/sent", response_model=ThreadListResponse)
 async def get_sent(
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=2000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -197,7 +197,7 @@ async def get_sent(
 @router.get("/trash", response_model=ThreadListResponse)
 async def get_trash(
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=2000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
