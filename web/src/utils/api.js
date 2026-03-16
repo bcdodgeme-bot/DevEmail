@@ -1,6 +1,7 @@
 /**
- * Lightweight fetch wrapper that injects the JWT token
- * and automatically refreshes expired tokens.
+ * Lightweight fetch wrapper that uses httpOnly cookies for auth.
+ * Tokens are never stored in JavaScript — the browser sends them automatically
+ * via cookies on every same-origin request.
  */
 
 const BASE = '/api';
@@ -8,62 +9,26 @@ const BASE = '/api';
 /** Track whether a refresh is already in progress to avoid duplicates */
 let refreshPromise = null;
 
-function getAccessToken() {
-  try {
-    return localStorage.getItem('access_token') || null;
-  } catch {
-    return null;
-  }
-}
-
-function getRefreshToken() {
-  try {
-    return localStorage.getItem('refresh_token') || null;
-  } catch {
-    return null;
-  }
-}
-
-function storeTokens(accessToken, refreshToken) {
-  localStorage.setItem('access_token', accessToken);
-  if (refreshToken) {
-    localStorage.setItem('refresh_token', refreshToken);
-  }
-}
-
-function clearAllAuth() {
-  localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
-  localStorage.removeItem('user');
-  window.location.href = '/login';
-}
-
 /**
- * Attempt to refresh the access token using the stored refresh token.
+ * Attempt to refresh the access token using the httpOnly refresh_token cookie.
  * De-duplicates concurrent refresh attempts.
  */
 async function refreshAccessToken() {
   if (refreshPromise) return refreshPromise;
 
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    clearAllAuth();
-    throw new Error('No refresh token available');
-  }
-
   refreshPromise = fetch(`${BASE}/auth/refresh`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    body: JSON.stringify({}),
   })
     .then(async (res) => {
       if (!res.ok) {
-        clearAllAuth();
-        throw new Error('Refresh token expired');
+        // Refresh failed — redirect to login
+        window.location.href = '/login';
+        throw new Error('Session expired');
       }
-      const data = await res.json();
-      storeTokens(data.access_token, data.refresh_token);
-      return data.access_token;
+      return res.json();
     })
     .finally(() => {
       refreshPromise = null;
@@ -74,28 +39,31 @@ async function refreshAccessToken() {
 
 /**
  * Main fetch wrapper.
- * - Injects Authorization header
+ * - Sends cookies automatically (credentials: 'include')
  * - On 401, tries to refresh the token and retry once
  * - Pass { raw: true } to get the raw Response (e.g. for blob downloads)
  */
 export async function apiFetch(path, opts = {}) {
-  const token = getAccessToken();
   const headers = {
     ...(opts.raw ? {} : { 'Content-Type': 'application/json' }),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...opts.headers,
   };
 
-  const res = await fetch(`${BASE}${path}`, { ...opts, headers });
+  const res = await fetch(`${BASE}${path}`, {
+    ...opts,
+    headers,
+    credentials: 'include',
+  });
 
   if (res.status === 401) {
     try {
-      const newToken = await refreshAccessToken();
-      const retryHeaders = {
-        ...headers,
-        Authorization: `Bearer ${newToken}`,
-      };
-      const retryRes = await fetch(`${BASE}${path}`, { ...opts, headers: retryHeaders });
+      await refreshAccessToken();
+      // Retry the original request — the new access_token cookie is now set
+      const retryRes = await fetch(`${BASE}${path}`, {
+        ...opts,
+        headers,
+        credentials: 'include',
+      });
 
       if (!retryRes.ok) {
         const body = await retryRes.json().catch(() => ({}));

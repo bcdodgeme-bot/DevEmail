@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # Credential encryption (Fernet key for IMAP/SMTP passwords at rest)
+    # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    CREDENTIAL_ENCRYPTION_KEY: Optional[str] = None
+
+    # Cookie security — set to False for local HTTP development
+    COOKIE_SECURE: bool = True
+
     # Google OAuth (optional — app boots without these, OAuth just won't work)
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None

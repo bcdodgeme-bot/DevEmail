@@ -23,6 +23,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 @router.get("")
 async def list_notifications(
     unread_only: bool = False,
+    category: Optional[str] = None,
     limit: int = 50,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -36,6 +37,8 @@ async def list_notifications(
     )
     if unread_only:
         query = query.where(Notification.read == False)
+    if category:
+        query = query.where(Notification.category == category)
 
     result = await db.execute(query)
     notifs = result.scalars().all()

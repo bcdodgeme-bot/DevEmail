@@ -20,6 +20,7 @@ import aiosmtplib
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import update as sa_update
 from app.models.account import Account
 from app.models.signature import Signature
 from app.models.thread import Thread
@@ -69,7 +70,7 @@ class EmailSendService:
             attachments: List of {"filename": "...", "content_type": "...", "data": bytes}
 
         Returns:
-            {"message_id": "...", "remote_id": "..."}
+            {"message_id": "...", "thread_id": "...", "remote_id": "..."}
         """
         cc = cc or []
         bcc = bcc or []
@@ -122,6 +123,7 @@ class EmailSendService:
 
         return {
             "message_id": str(message.id),
+            "thread_id": str(message.thread_id),
             "remote_id": remote_id,
         }
 
@@ -213,7 +215,9 @@ class EmailSendService:
 
     async def _send_smtp(self, mime_msg: MIMEMultipart) -> Optional[str]:
         """Send via Stalwart SMTP."""
-        host = self.account.smtp_host or "mail.damnitcarl.dev"
+        if not self.account.smtp_host:
+            raise ValueError(f"No SMTP host configured for account {self.account.email_address}")
+        host = self.account.smtp_host
         port = self.account.smtp_port or 465
 
         # Collect all recipient addresses
@@ -231,12 +235,13 @@ class EmailSendService:
         if "Bcc" in mime_msg:
             del mime_msg["Bcc"]
 
+        from app.services.crypto import decrypt_credential
         await aiosmtplib.send(
             mime_msg,
             hostname=host,
             port=port,
             username=self.account.username,
-            password=self.account.password,
+            password=decrypt_credential(self.account.password),
             use_tls=True,
             sender=self.account.email_address,
             recipients=all_recipients,
@@ -352,9 +357,13 @@ class EmailSendService:
             received_at=now,
         )
         self.db.add(message)
+        await self.db.flush()
 
-        thread.message_count += 1
-        thread.last_message_at = now
+        await self.db.execute(
+            sa_update(Thread)
+            .where(Thread.id == thread.id)
+            .values(message_count=Thread.message_count + 1, last_message_at=now)
+        )
 
         await self.db.commit()
         await self.db.refresh(message)

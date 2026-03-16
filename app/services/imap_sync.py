@@ -16,7 +16,8 @@ from email.header import decode_header
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -315,8 +316,12 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
         )
         db.add(new_message)
 
-        # Update thread
-        thread.message_count += 1
+        # Update thread atomically
+        await db.execute(
+            update(Thread)
+            .where(Thread.id == thread.id)
+            .values(message_count=Thread.message_count + 1)
+        )
         if date and (thread.last_message_at is None or date > thread.last_message_at):
             thread.last_message_at = date
 
@@ -331,7 +336,12 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     # Update last_synced_at
     account.last_synced_at = datetime.now(timezone.utc)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        logger.warning(f"Duplicate message(s) detected during batch commit for {account.email_address}, rolling back batch")
+        return {"fetched": len(raw_messages), "new": 0, "skipped": len(raw_messages)}
 
     logger.info(f"Sync complete for {account.email_address}: {new_count} new, {skipped_count} skipped")
     return {"fetched": len(raw_messages), "new": new_count, "skipped": skipped_count}
@@ -391,20 +401,8 @@ async def _find_or_create_thread(
                     if thread:
                         return thread
 
-    # Strategy 3: Match by normalized subject
+    # Strategy 3: Create new thread
     normalized = re.sub(r"^(Re|Fwd|Fw)\s*:\s*", "", subject or "", flags=re.IGNORECASE).strip()
-    if normalized:
-        result = await db.execute(
-            select(Thread).where(
-                Thread.user_id == user_id,
-                Thread.subject == normalized,
-            ).order_by(Thread.last_message_at.desc().nullslast()).limit(1)
-        )
-        thread = result.scalar_one_or_none()
-        if thread:
-            return thread
-
-    # Strategy 4: Create new thread
     thread = Thread(
         user_id=user_id,
         subject=normalized or subject or "(no subject)",

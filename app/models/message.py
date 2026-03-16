@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, func, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -8,6 +8,9 @@ from app.database import Base
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("account_id", "remote_id", name="uq_messages_account_remote"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("threads.id", ondelete="CASCADE"), nullable=False)

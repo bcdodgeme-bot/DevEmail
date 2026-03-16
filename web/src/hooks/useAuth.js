@@ -10,7 +10,7 @@ import {
   logoutAll,
   fetchCurrentUser,
   clearError,
-  setOAuthCredentials,
+  initializeAuth,
 } from '../store/authSlice';
 
 export function useAuth() {
@@ -44,9 +44,9 @@ export function useAuth() {
     dispatch(clearError());
   };
 
-  // Handle OAuth callback — stores tokens + user from URL params into Redux and localStorage
-  const handleOAuthCallback = ({ access_token, refresh_token, user }) => {
-    dispatch(setOAuthCredentials({ access_token, refresh_token, user }));
+  // Called after Google OAuth redirect — re-initializes auth state from cookies
+  const handleOAuthCallback = () => {
+    dispatch(initializeAuth());
   };
 
   return {

@@ -11,7 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -39,15 +40,18 @@ class StalwartSyncService:
         """Establish IMAP connection to Stalwart."""
         import aioimaplib
 
-        host = self.account.imap_host or "mail.damnitcarl.dev"
+        if not self.account.imap_host:
+            raise ValueError(f"No IMAP host configured for account {self.account.email_address}")
+        host = self.account.imap_host
         port = self.account.imap_port or 993
 
         self._imap = aioimaplib.IMAP4_SSL(host=host, port=port)
         await self._imap.wait_hello_from_server()
 
+        from app.services.crypto import decrypt_credential
         response = await self._imap.login(
             self.account.username,
-            self.account.password,
+            decrypt_credential(self.account.password),
         )
 
         if response.result != "OK":
@@ -183,6 +187,9 @@ class StalwartSyncService:
                 if msg_data:
                     await self._store_message(msg_data, remote_id, folder_id, folder_name)
                     new_count += 1
+            except IntegrityError:
+                await self.db.rollback()
+                logger.debug(f"Skipping duplicate message UID {uid} (already exists)")
             except Exception as e:
                 logger.error(f"Failed to fetch message UID {uid}: {e}")
                 continue
@@ -325,8 +332,12 @@ class StalwartSyncService:
         if unsub:
             await self._store_unsubscribe(message, unsub, msg.get("List-Id"))
 
-        # Update thread
-        thread.message_count += 1
+        # Update thread atomically
+        await self.db.execute(
+            update(Thread)
+            .where(Thread.id == thread.id)
+            .values(message_count=Thread.message_count + 1)
+        )
         if not thread.last_message_at or (received_at and received_at > thread.last_message_at):
             thread.last_message_at = received_at
         if is_starred:
@@ -360,25 +371,6 @@ class StalwartSyncService:
                     select(Thread).where(Thread.id == row[0])
                 )
                 thread = thread_result.scalar_one_or_none()
-                if thread:
-                    return thread
-
-        # Try matching by subject
-        if subject:
-            clean = subject
-            for prefix in ("Re: ", "RE: ", "Fwd: ", "FWD: ", "Fw: "):
-                while clean.startswith(prefix):
-                    clean = clean[len(prefix):]
-            clean = clean.strip()
-
-            if clean:
-                result = await self.db.execute(
-                    select(Thread).where(
-                        Thread.user_id == self.account.user_id,
-                        Thread.subject == clean,
-                    ).order_by(Thread.created_at.desc()).limit(1)
-                )
-                thread = result.scalar_one_or_none()
                 if thread:
                     return thread
 

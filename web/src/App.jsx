@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
-import { selectIsAuthenticated } from './store/authSlice';
+import { useSelector, useDispatch } from 'react-redux';
+import { selectIsAuthenticated, selectAuthInitialized, initializeAuth } from './store/authSlice';
+import { requestBrowserNotificationPermission } from './utils/browserNotifications';
 import { ROUTES } from './utils/constants';
 
 // Layout
@@ -33,6 +35,25 @@ function PublicRoute({ children }) {
 }
 
 export default function App() {
+  const dispatch = useDispatch();
+  const initialized = useSelector(selectAuthInitialized);
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+
+  useEffect(() => {
+    dispatch(initializeAuth());
+  }, [dispatch]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      requestBrowserNotificationPermission();
+    }
+  }, [isAuthenticated]);
+
+  // Wait for session check before rendering protected routes
+  if (!initialized) {
+    return null;
+  }
+
   return (
     <BrowserRouter>
       <Routes>

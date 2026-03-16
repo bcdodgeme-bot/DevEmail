@@ -11,7 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -165,22 +166,15 @@ class GmailSyncService:
         for ref in all_message_refs:
             gmail_id = ref["id"]
 
-            # Skip if we already have this message
-            result = await self.db.execute(
-                select(Message).where(
-                    Message.account_id == self.account.id,
-                    Message.remote_id == gmail_id,
-                )
-            )
-            if result.scalar_one_or_none():
-                continue
-
-            # Fetch full message
+            # Fetch and store — rely on unique constraint to prevent duplicates
             try:
                 msg_data = await self._fetch_message(gmail_id)
                 if msg_data:
                     await self._store_message(msg_data)
                     new_count += 1
+            except IntegrityError:
+                await self.db.rollback()
+                logger.debug(f"Skipping duplicate message {gmail_id} (already exists)")
             except Exception as e:
                 logger.error(f"Failed to fetch message {gmail_id}: {e}")
                 continue
@@ -303,8 +297,13 @@ class GmailSyncService:
         if has_attachments:
             await self._store_attachment_metadata(message, payload)
 
-        # Update thread
-        thread.message_count += 1
+        # Update thread atomically
+        from sqlalchemy import func as sqlfunc
+        await self.db.execute(
+            update(Thread)
+            .where(Thread.id == thread.id)
+            .values(message_count=Thread.message_count + 1)
+        )
         if not thread.last_message_at or (received_at and received_at > thread.last_message_at):
             thread.last_message_at = received_at
         if is_starred:
@@ -370,21 +369,6 @@ class GmailSyncService:
                     select(Thread).where(Thread.id == existing_msg.thread_id)
                 )
                 thread = thread_result.scalar_one_or_none()
-                if thread:
-                    return thread
-
-        # Fallback: match by cleaned subject
-        if subject:
-            import re
-            clean_subject = re.sub(r'^(Re|Fwd|Fw):\s*', '', subject, flags=re.IGNORECASE).strip()
-            if clean_subject:
-                result = await self.db.execute(
-                    select(Thread).where(
-                        Thread.user_id == self.account.user_id,
-                        Thread.subject == clean_subject,
-                    ).order_by(Thread.created_at.desc()).limit(1)
-                )
-                thread = result.scalar_one_or_none()
                 if thread:
                     return thread
 

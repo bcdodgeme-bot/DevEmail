@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -7,6 +7,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.account import Account
 from app.models.signature import Signature
+from app.services.crypto import encrypt_credential
 from app.schemas.account import (
     AccountCreateStalwart,
     AccountUpdate,
@@ -77,7 +78,7 @@ async def link_stalwart_account(
         smtp_host=request.smtp_host,
         smtp_port=request.smtp_port,
         username=request.username,
-        password=request.password,
+        password=encrypt_credential(request.password),
         is_default=existing_count == 0,
         sync_enabled=True,
     )
@@ -115,15 +116,12 @@ async def update_account(
         account.sync_enabled = request.sync_enabled
 
     if request.is_default is True:
-        # Unset other defaults first
-        result = await db.execute(
-            select(Account).where(
-                Account.user_id == user.id,
-                Account.is_default == True,
-            )
+        # Atomically clear all defaults for this user, then set the new one
+        await db.execute(
+            update(Account)
+            .where(Account.user_id == user.id)
+            .values(is_default=False)
         )
-        for other in result.scalars().all():
-            other.is_default = False
         account.is_default = True
 
     await db.commit()

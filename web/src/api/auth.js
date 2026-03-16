@@ -31,19 +31,11 @@ export const authAPI = {
     return apiFetch('/auth/me');
   },
 
-  // Refresh tokens
-  async refresh(refreshToken) {
-    return apiFetch('/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-  },
-
-  // Logout (revoke single refresh token)
-  async logout(refreshToken) {
+  // Logout (revoke current session — cookie sent automatically)
+  async logout() {
     return apiFetch('/auth/logout', {
       method: 'POST',
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({}),
     });
   },
 

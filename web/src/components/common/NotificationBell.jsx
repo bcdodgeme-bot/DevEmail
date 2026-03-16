@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bell, Check, CheckCheck, Mail, Calendar } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
+import { canShowBrowserNotifications, showBrowserNotification } from '../../utils/browserNotifications';
 import styles from './NotificationBell.module.css';
 
 const CATEGORY_ICONS = {
@@ -10,12 +11,29 @@ const CATEGORY_ICONS = {
 
 const POLL_INTERVAL = 60_000; // 60 seconds
 
+// IDs of notifications already shown as browser popups — persists across re-renders
+// but clears on tab close (fine for time-sensitive reminders)
+function loadShownIds() {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem('browserNotifIds') || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveShownIds(set) {
+  try {
+    sessionStorage.setItem('browserNotifIds', JSON.stringify([...set]));
+  } catch { /* storage full — not critical */ }
+}
+
 export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const ref = useRef(null);
+  const shownIds = useRef(loadShownIds());
 
   /* Fetch unread count on interval */
   const fetchUnreadCount = useCallback(async () => {
@@ -32,6 +50,30 @@ export default function NotificationBell() {
     const interval = setInterval(fetchUnreadCount, POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [fetchUnreadCount]);
+
+  /* Fire browser notifications for new calendar reminders */
+  const checkBrowserReminders = useCallback(async () => {
+    if (!canShowBrowserNotifications()) return;
+    try {
+      const data = await apiFetch('/notifications?unread_only=true&category=calendar_reminder&limit=10');
+      const reminders = data.notifications || [];
+      for (const n of reminders) {
+        if (!shownIds.current.has(n.id)) {
+          shownIds.current.add(n.id);
+          saveShownIds(shownIds.current);
+          showBrowserNotification(n.title, n.body);
+        }
+      }
+    } catch {
+      // silent fail
+    }
+  }, []);
+
+  useEffect(() => {
+    checkBrowserReminders();
+    const interval = setInterval(checkBrowserReminders, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [checkBrowserReminders]);
 
   /* Fetch full list when dropdown opens */
   const fetchNotifications = async () => {

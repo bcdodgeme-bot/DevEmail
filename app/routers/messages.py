@@ -1,6 +1,7 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import select, func, or_, and_, desc
+from sqlalchemy import select, func, or_, and_, desc, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from typing import Optional
@@ -472,11 +473,16 @@ async def download_attachment(
             detail="Attachment content not available",
         )
 
+    safe_filename = re.sub(r'[^\w\s\-.]', '_', attachment.filename or 'attachment')
+    safe_filename = safe_filename.replace('\n', '').replace('\r', '')
+    from urllib.parse import quote
+    encoded_filename = quote(safe_filename, safe='')
+
     return Response(
         content=content,
         media_type=attachment.content_type or "application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="{attachment.filename}"',
+            "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{encoded_filename}",
         },
     )
 
@@ -668,8 +674,12 @@ async def compose_message(
             is_read=True,
         )
         db.add(message)
-        thread.message_count += 1
-        thread.last_message_at = message.sent_at or message.created_at
+        await db.flush()
+        await db.execute(
+            sa_update(Thread)
+            .where(Thread.id == thread.id)
+            .values(message_count=Thread.message_count + 1)
+        )
         await db.commit()
         await db.refresh(message)
 
@@ -694,22 +704,30 @@ async def compose_message(
                 in_reply_to_header = orig_msg.message_id_header
                 references_header = orig_msg.references
 
-        result = await sender.send(
-            to=[a.model_dump() for a in request.to_addresses],
-            subject=request.subject,
-            body_html=request.body_html,
-            body_text=request.body_text,
-            cc=[a.model_dump() for a in request.cc_addresses],
-            bcc=[a.model_dump() for a in request.bcc_addresses],
-            in_reply_to=in_reply_to_header,
-            references=references_header,
-            signature_id=request.signature_id if hasattr(request, 'signature_id') else None,
-            read_receipt=request.read_receipt_requested,
-        )
+        try:
+            result = await sender.send(
+                to=[a.model_dump() for a in request.to_addresses],
+                subject=request.subject,
+                body_html=request.body_html,
+                body_text=request.body_text,
+                cc=[a.model_dump() for a in request.cc_addresses],
+                bcc=[a.model_dump() for a in request.bcc_addresses],
+                in_reply_to=in_reply_to_header,
+                references=references_header,
+                signature_id=request.signature_id,
+                read_receipt=request.read_receipt_requested,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Failed to send message: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send message. Please check your account settings and try again.",
+            )
 
         return {
             "message_id": result["message_id"],
-            "thread_id": "",
+            "thread_id": result["thread_id"],
             "status": "sent",
         }
 

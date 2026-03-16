@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -141,6 +144,44 @@ async def revoke_all_user_tokens(db: AsyncSession, user_id: uuid.UUID) -> None:
     for t in tokens:
         t.revoked = True
     await db.commit()
+
+
+# =============================================
+# OAuth state tokens (HMAC-signed, time-limited)
+# =============================================
+
+OAUTH_STATE_TTL = 600  # 10 minutes
+
+
+def create_oauth_state(user_id: str) -> str:
+    """Create a signed, time-limited state token for OAuth flows."""
+    nonce = str(uuid.uuid4())
+    expires = int(time.time()) + OAUTH_STATE_TTL
+    payload = f"{user_id}:{nonce}:{expires}"
+    sig = hmac.new(settings.JWT_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def verify_oauth_state(state: str) -> Optional[str]:
+    """
+    Verify an OAuth state token.
+    Returns the user_id if valid, None otherwise.
+    """
+    try:
+        parts = state.split(":")
+        if len(parts) != 4:
+            return None
+        user_id, nonce, expires_str, sig = parts
+        expires = int(expires_str)
+        if time.time() > expires:
+            return None
+        payload = f"{user_id}:{nonce}:{expires_str}"
+        expected_sig = hmac.new(settings.JWT_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        return user_id
+    except Exception:
+        return None
 
 
 def decode_access_token(token: str) -> Optional[dict]:
