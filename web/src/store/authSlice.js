@@ -7,10 +7,23 @@ import { authAPI } from '../api/auth';
  * Called on app startup to check if the user has a valid session
  * (i.e. the httpOnly access_token cookie is still valid).
  * If the access token is expired, the apiFetch wrapper will auto-refresh.
+ *
+ * If ?session_expired=1 is in the URL, the session is already known to be
+ * dead (circuit breaker tripped) — skip the API call to break the loop.
  */
 export const initializeAuth = createAsyncThunk(
   'auth/initialize',
   async (_, { rejectWithValue }) => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('session_expired') === '1') {
+      // Clean up the query param so it doesn't persist on manual refresh
+      params.delete('session_expired');
+      const clean = params.toString();
+      const newUrl = window.location.pathname + (clean ? `?${clean}` : '');
+      window.history.replaceState({}, '', newUrl);
+      return rejectWithValue(null);
+    }
+
     try {
       return await authAPI.me();
     } catch {

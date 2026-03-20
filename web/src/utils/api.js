@@ -6,15 +6,41 @@
 
 const BASE = '/api';
 
-/** Track whether a refresh is already in progress to avoid duplicates */
+/** Circuit breaker state for token refresh */
 let refreshPromise = null;
+let refreshFailures = 0;
+const MAX_REFRESH_FAILURES = 3;
+const BACKOFF_BASE_MS = 500;
+
+/**
+ * Redirect to login and stop the refresh cycle.
+ * The ?session_expired=1 param signals initializeAuth to skip the API call.
+ */
+function redirectToLogin() {
+  refreshFailures = 0;
+  refreshPromise = null;
+  window.location.href = '/login?session_expired=1';
+}
 
 /**
  * Attempt to refresh the access token using the httpOnly refresh_token cookie.
  * De-duplicates concurrent refresh attempts.
+ * Circuit breaker: after MAX_REFRESH_FAILURES consecutive failures, stops
+ * retrying and redirects to login.
  */
 async function refreshAccessToken() {
+  if (refreshFailures >= MAX_REFRESH_FAILURES) {
+    redirectToLogin();
+    throw new Error('Session expired — too many refresh failures');
+  }
+
   if (refreshPromise) return refreshPromise;
+
+  // Backoff: wait longer after each consecutive failure
+  if (refreshFailures > 0) {
+    const delay = BACKOFF_BASE_MS * Math.pow(2, refreshFailures - 1);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 
   refreshPromise = fetch(`${BASE}/auth/refresh`, {
     method: 'POST',
@@ -24,10 +50,14 @@ async function refreshAccessToken() {
   })
     .then(async (res) => {
       if (!res.ok) {
-        // Refresh failed — redirect to login
-        window.location.href = '/login';
+        refreshFailures++;
+        if (refreshFailures >= MAX_REFRESH_FAILURES) {
+          redirectToLogin();
+        }
         throw new Error('Session expired');
       }
+      // Success — reset the failure counter
+      refreshFailures = 0;
       return res.json();
     })
     .finally(() => {
@@ -54,6 +84,12 @@ export async function apiFetch(path, opts = {}) {
     headers,
     credentials: 'include',
   });
+
+  // 429 = rate-limited, likely from refresh loop — treat as dead session
+  if (res.status === 429) {
+    redirectToLogin();
+    throw new Error('Rate limited — session expired');
+  }
 
   if (res.status === 401) {
     try {
