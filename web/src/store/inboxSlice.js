@@ -87,6 +87,21 @@ export const unsnoozeThread = createAsyncThunk(
   }
 );
 
+/** Remove the given thread from the list and advance selection to the next
+ *  thread at the same position (or the previous one if it was last). */
+function advanceAfterRemoval(state, threadId) {
+  const idx = state.threads.findIndex((t) => t.id === threadId);
+  state.threads = state.threads.filter((t) => t.id !== threadId);
+  if (state.selectedThreadId !== threadId) return;
+  let nextId = null;
+  if (state.threads.length > 0 && idx !== -1) {
+    const nextIdx = idx < state.threads.length ? idx : state.threads.length - 1;
+    nextId = state.threads[nextIdx]?.id || null;
+  }
+  state.selectedThreadId = nextId;
+  state.threadDetail = null;
+}
+
 /* ── Slice ────────────────────────────────────────────── */
 
 const inboxSlice = createSlice({
@@ -189,22 +204,14 @@ const inboxSlice = createSlice({
       if (t) t.has_unread = true;
     });
 
-    /* ── archiveThread — remove from list ── */
+    /* ── archiveThread — remove from list, advance to next ── */
     builder.addCase(archiveThread.fulfilled, (state, action) => {
-      state.threads = state.threads.filter((t) => t.id !== action.payload.threadId);
-      if (state.selectedThreadId === action.payload.threadId) {
-        state.selectedThreadId = null;
-        state.threadDetail = null;
-      }
+      advanceAfterRemoval(state, action.payload.threadId);
     });
 
-    /* ── trashThread — remove from list ── */
+    /* ── trashThread — remove from list, advance to next ── */
     builder.addCase(trashThread.fulfilled, (state, action) => {
-      state.threads = state.threads.filter((t) => t.id !== action.payload.threadId);
-      if (state.selectedThreadId === action.payload.threadId) {
-        state.selectedThreadId = null;
-        state.threadDetail = null;
-      }
+      advanceAfterRemoval(state, action.payload.threadId);
     });
 
     /* ── snoozeThread — remove from inbox list ── */

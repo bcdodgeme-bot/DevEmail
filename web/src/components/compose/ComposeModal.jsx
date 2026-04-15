@@ -8,12 +8,22 @@ import {
   Paperclip,
 } from 'lucide-react';
 import { selectAccounts, selectDefaultAccount, fetchAccounts } from '../../store/accountsSlice';
+import { archiveThread } from '../../store/inboxSlice';
 import { composeAPI } from '../../api/compose';
+import { apiFetch } from '../../utils/api';
 import AccountPicker from './AccountPicker';
 import RecipientInput from './RecipientInput';
 import styles from './ComposeModal.module.css';
 
 const AUTOSAVE_INTERVAL = 30000; // 30 seconds
+
+/** Decode HTML entities like &#39; &amp; &lt; into their literal characters. */
+function decodeEntities(text) {
+  if (!text) return '';
+  const ta = document.createElement('textarea');
+  ta.innerHTML = text;
+  return ta.value;
+}
 
 function stripHtml(html) {
   if (!html) return '';
@@ -92,10 +102,24 @@ export default function ComposeModal({
     if (!isOpen) return;
 
     if (replyTo) {
-      setTo([{
-        address: replyTo.from_address || replyTo.latest_from_address || '',
-        name: replyTo.from_name || replyTo.latest_from_name || '',
-      }]);
+      // Find the latest received message in the thread — its account_id is the
+      // inbox that received the email. Thread detail messages are newest-first.
+      const received = (replyTo.messages || []).find((m) => !m.is_sent && !m.is_draft);
+      const sourceMsg = received || (replyTo.messages || [])[0] || replyTo;
+
+      const fromAddr = sourceMsg.from_address || replyTo.from_address || replyTo.latest_from_address || '';
+      const fromName = sourceMsg.from_name || replyTo.from_name || replyTo.latest_from_name || '';
+
+      // Auto-select the account that received this email, and its default signature
+      const receivingAccountId = sourceMsg.account_id;
+      if (receivingAccountId) {
+        setAccountId(receivingAccountId);
+        const receivingAccount = accounts.find((a) => a.id === receivingAccountId);
+        const defaultSig = receivingAccount?.signatures?.find((s) => s.is_default);
+        setSignatureId(defaultSig?.id || '');
+      }
+
+      setTo([{ address: fromAddr, name: fromName }]);
       setSubject(
         replyTo.subject?.startsWith('Re:')
           ? replyTo.subject
@@ -103,19 +127,48 @@ export default function ComposeModal({
       );
       if (replyAll) {
         const allRecipients = [
-          ...(replyTo.to_addresses || []),
-          ...(replyTo.cc_addresses || []),
-        ].filter((r) => r.address !== (replyTo.from_address || replyTo.latest_from_address));
+          ...(sourceMsg.to_addresses || replyTo.to_addresses || []),
+          ...(sourceMsg.cc_addresses || replyTo.cc_addresses || []),
+        ].filter((r) => r.address !== fromAddr);
         setCc(allRecipients);
         setShowCcBcc(allRecipients.length > 0);
       }
-      const replyDate = replyTo.received_at || replyTo.sent_at || replyTo.last_message_at;
-      const replyName = replyTo.from_name || replyTo.latest_from_name || replyTo.from_address || replyTo.latest_from_address || '';
+
+      const replyDate = sourceMsg.received_at || sourceMsg.sent_at || replyTo.last_message_at;
+      const replyName = fromName || fromAddr || '';
       const dateStr = replyDate ? new Date(replyDate).toLocaleString() : '';
-      const originalText = stripHtml(replyTo.body_html || replyTo.body_text || '') || replyTo.latest_snippet || '';
-      setBodyText(
-        `\n\nOn ${dateStr}, ${replyName} wrote:\n> ${originalText.replace(/\n/g, '\n> ')}`
-      );
+      const rawOriginal =
+        stripHtml(sourceMsg.body_html || replyTo.body_html || '') ||
+        sourceMsg.body_text ||
+        replyTo.body_text ||
+        replyTo.latest_snippet ||
+        '';
+      const originalText = decodeEntities(rawOriginal);
+
+      // Look up contact for greeting
+      (async () => {
+        let greeting = '';
+        if (fromAddr) {
+          try {
+            const res = await apiFetch(`/contacts?search=${encodeURIComponent(fromAddr)}&per_page=5`);
+            const match = (res.contacts || []).find((c) => {
+              const emails = c.emails || [];
+              return emails.some((e) => {
+                const addr = typeof e === 'string' ? e : e.address || e.email;
+                return addr && addr.toLowerCase() === fromAddr.toLowerCase();
+              });
+            });
+            if (match?.first_name) {
+              greeting = `Hello ${match.first_name},\n\n`;
+            }
+          } catch {
+            // Ignore contact lookup failures
+          }
+        }
+        setBodyText(
+          `${greeting}\n\nOn ${dateStr}, ${replyName} wrote:\n> ${originalText.replace(/\n/g, '\n> ')}`
+        );
+      })();
     } else if (forward) {
       setSubject(
         forward.subject?.startsWith('Fwd:')
@@ -126,7 +179,9 @@ export default function ComposeModal({
       const fwdName = forward.from_name || forward.latest_from_name || '';
       const fwdAddr = forward.from_address || forward.latest_from_address || '';
       const fwdDateStr = fwdDate ? new Date(fwdDate).toLocaleString() : '';
-      const fwdText = stripHtml(forward.body_html || forward.body_text || '') || forward.latest_snippet || '';
+      const fwdText = decodeEntities(
+        stripHtml(forward.body_html || '') || forward.body_text || forward.latest_snippet || ''
+      );
       setBodyText(
         `\n\n---------- Forwarded message ----------\n` +
         `From: ${fwdName} <${fwdAddr}>\n` +
@@ -143,7 +198,18 @@ export default function ComposeModal({
         )
       );
     }
+    // Intentionally omit `accounts` from deps so that fetchAccounts mid-compose
+    // doesn't reset the form. Signature resolution falls back to a separate effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, replyTo, replyAll, forward, prefillTo]);
+
+  // When accounts load after reply init, resolve the default signature for the chosen account
+  useEffect(() => {
+    if (!accountId || signatureId) return;
+    const account = accounts.find((a) => a.id === accountId);
+    const defaultSig = account?.signatures?.find((s) => s.is_default);
+    if (defaultSig) setSignatureId(defaultSig.id);
+  }, [accounts, accountId, signatureId]);
 
   // Mark dirty on any field change
   useEffect(() => {
@@ -233,6 +299,10 @@ export default function ComposeModal({
 
     try {
       await composeAPI.send(buildPayload(false));
+      // Auto-archive the thread we replied to
+      if (replyTo?.id) {
+        dispatch(archiveThread(replyTo.id));
+      }
       resetAndClose();
     } catch (err) {
       setError(err.message || 'Failed to send email');

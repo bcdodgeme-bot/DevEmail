@@ -1,6 +1,20 @@
+import { useEffect, useState } from 'react';
 import { Wifi, WifiOff, RefreshCw, Clock } from 'lucide-react';
 import { format } from 'date-fns';
 import styles from './StatusBar.module.css';
+
+/** Human-readable elapsed time since an ISO timestamp. */
+function formatSince(iso) {
+  if (!iso) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 export default function StatusBar({
   isConnected = true,
@@ -9,6 +23,15 @@ export default function StatusBar({
   accountCount = 0,
 }) {
   const now = format(new Date(), 'h:mm a');
+
+  // Tick once per second so the "X seconds ago" label stays fresh
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const syncedLabel = formatSince(lastSynced);
 
   return (
     <footer className={styles.bar}>
@@ -32,9 +55,9 @@ export default function StatusBar({
         )}
 
         {/* Last synced */}
-        {lastSynced && !isSyncing && (
-          <span className={styles.meta}>
-            Last synced {lastSynced}
+        {syncedLabel && !isSyncing && (
+          <span className={styles.meta} title={new Date(lastSynced).toLocaleString()}>
+            Last synced {syncedLabel}
           </span>
         )}
       </div>

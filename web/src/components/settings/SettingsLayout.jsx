@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { User, Key, Palette, Bell, Shield, Info } from 'lucide-react';
+import { User, FileSignature, Palette, Bell, Shield, Info, Key } from 'lucide-react';
 import styles from './SettingsLayout.module.css';
 
 const SECTIONS = [
   { key: 'accounts', label: 'Accounts', icon: User },
-  { key: 'signatures', label: 'Signatures', icon: Key },
+  { key: 'signatures', label: 'Signatures', icon: FileSignature },
   { key: 'appearance', label: 'Appearance', icon: Palette },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'privacy', label: 'Privacy', icon: Shield },
+  { key: 'api_keys', label: 'API Keys', icon: Key },
   { key: 'about', label: 'About', icon: Info },
 ];
 

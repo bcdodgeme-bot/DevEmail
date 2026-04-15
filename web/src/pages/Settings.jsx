@@ -7,6 +7,7 @@ import SignatureEditor from '../components/settings/SignatureEditor';
 import AppearanceSettings from '../components/settings/AppearanceSettings';
 import NotificationSettings from '../components/settings/NotificationSettings';
 import PrivacySettings from '../components/settings/PrivacySettings';
+import ApiKeysSettings from '../components/settings/ApiKeysSettings';
 import styles from './Settings.module.css';
 
 export default function Settings() {
@@ -33,6 +34,8 @@ export default function Settings() {
         return <NotificationSettings />;
       case 'privacy':
         return <PrivacySettings />;
+      case 'api_keys':
+        return <ApiKeysSettings />;
       case 'about':
         return (
           <div className={styles.about}>

@@ -26,6 +26,7 @@ class Account(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    gmail_history_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

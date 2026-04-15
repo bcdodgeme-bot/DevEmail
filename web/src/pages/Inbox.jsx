@@ -60,6 +60,47 @@ export default function Inbox() {
     dispatch(fetchThreads({ view: currentView }));
   }, [currentView, dispatch]);
 
+  /* Auto-poll inbox every 60s while tab is visible. Selection/detail pane are
+     preserved because fetchThreads only rewrites the list — not the selected id. */
+  useEffect(() => {
+    if (currentView !== 'inbox') return;
+
+    const POLL_MS = 60_000;
+    let intervalId = null;
+
+    const start = () => {
+      if (intervalId) return;
+      intervalId = setInterval(() => {
+        dispatch(fetchThreads({ view: 'inbox' }));
+      }, POLL_MS);
+    };
+    const stop = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // Refresh immediately on return, then resume polling
+        dispatch(fetchThreads({ view: 'inbox' }));
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    // Kick off based on current visibility
+    if (document.visibilityState === 'visible') start();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [currentView, dispatch]);
+
   /* Deep-link: auto-select thread from URL param */
   useEffect(() => {
     if (urlThreadId && urlThreadId !== selectedId) {

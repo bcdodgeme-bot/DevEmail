@@ -188,16 +188,166 @@ class GmailSyncService:
 
     async def sync_incremental(self) -> int:
         """
-        Incremental sync — only fetch messages since last sync.
-        Uses Gmail's 'after' query based on last_synced_at.
+        Incremental sync.
+
+        If gmail_history_id is set, use history.list to detect:
+          - new messages (messagesAdded)
+          - remote archives (INBOX label removed)
+          - remote trashes (TRASH label added) and deletes (messagesDeleted)
+          - un-archives (INBOX label added back)
+
+        Otherwise fall back to the older after:<epoch> query and seed the
+        gmail_history_id from the most recent message for next time.
         """
+        if self.account.gmail_history_id:
+            try:
+                return await self._sync_via_history()
+            except Exception as e:
+                # 404 = historyId too old (> ~7 days). Full resync below.
+                logger.warning(
+                    "history.list failed for %s (%s) — falling back to full incremental",
+                    self.account.email_address, e,
+                )
+                self.account.gmail_history_id = None
+                await self.db.commit()
+
+        # Legacy / first-run path
         query = None
         if self.account.last_synced_at:
-            # Gmail accepts epoch seconds for after: query
             epoch = int(self.account.last_synced_at.timestamp())
             query = f"after:{epoch}"
 
-        return await self.sync_messages(query=query)
+        new_count = await self.sync_messages(query=query)
+        await self._seed_history_id()
+        return new_count
+
+    async def _seed_history_id(self):
+        """Record the current Gmail profile historyId so future syncs use history.list."""
+        try:
+            data = await self._request("GET", f"{GMAIL_API}/profile")
+            hid = data.get("historyId")
+            if hid:
+                self.account.gmail_history_id = str(hid)
+                await self.db.commit()
+        except Exception as e:
+            logger.warning("Failed to seed gmail_history_id for %s: %s", self.account.email_address, e)
+
+    async def _sync_via_history(self) -> int:
+        """Apply Gmail history records since gmail_history_id."""
+        start_id = self.account.gmail_history_id
+        page_token = None
+        new_count = 0
+        latest_history_id = start_id
+
+        # Collect changes across pages before applying, so we batch updates
+        added_ids: set[str] = set()
+        label_changes: dict[str, dict[str, set[str]]] = {}  # remote_id -> {'added': {labels}, 'removed': {labels}}
+        deleted_ids: set[str] = set()
+
+        while True:
+            params = {
+                "startHistoryId": start_id,
+                "historyTypes": ["messageAdded", "labelAdded", "labelRemoved", "messageDeleted"],
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            data = await self._request("GET", f"{GMAIL_API}/history", params=params)
+            records = data.get("history", [])
+            if data.get("historyId"):
+                latest_history_id = str(data["historyId"])
+
+            for rec in records:
+                for m in rec.get("messagesAdded", []):
+                    mid = m.get("message", {}).get("id")
+                    if mid:
+                        added_ids.add(mid)
+                for m in rec.get("messagesDeleted", []):
+                    mid = m.get("message", {}).get("id")
+                    if mid:
+                        deleted_ids.add(mid)
+                for la in rec.get("labelsAdded", []):
+                    mid = la.get("message", {}).get("id")
+                    labels = la.get("labelIds", [])
+                    if mid and labels:
+                        entry = label_changes.setdefault(mid, {"added": set(), "removed": set()})
+                        entry["added"].update(labels)
+                for lr in rec.get("labelsRemoved", []):
+                    mid = lr.get("message", {}).get("id")
+                    labels = lr.get("labelIds", [])
+                    if mid and labels:
+                        entry = label_changes.setdefault(mid, {"added": set(), "removed": set()})
+                        entry["removed"].update(labels)
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+        # Apply new messages
+        for gmail_id in added_ids:
+            try:
+                msg_data = await self._fetch_message(gmail_id)
+                if msg_data:
+                    await self._store_message(msg_data)
+                    new_count += 1
+            except IntegrityError:
+                await self.db.rollback()
+            except Exception as e:
+                logger.error("history messagesAdded: failed to store %s: %s", gmail_id, e)
+
+        # Apply label changes to existing messages
+        for remote_id, changes in label_changes.items():
+            added = changes["added"]
+            removed = changes["removed"]
+            values = {}
+            if "TRASH" in added:
+                values["is_trashed"] = True
+            if "TRASH" in removed:
+                values["is_trashed"] = False
+            if "INBOX" in removed:
+                values["is_archived"] = True
+            if "INBOX" in added:
+                values["is_archived"] = False
+            if "UNREAD" in removed:
+                values["is_read"] = True
+            if "UNREAD" in added:
+                values["is_read"] = False
+            if "STARRED" in added:
+                values["is_starred"] = True
+            if "STARRED" in removed:
+                values["is_starred"] = False
+            if values:
+                await self.db.execute(
+                    update(Message)
+                    .where(
+                        Message.account_id == self.account.id,
+                        Message.remote_id == remote_id,
+                    )
+                    .values(**values)
+                )
+
+        # Apply hard deletes → mark trashed locally
+        if deleted_ids:
+            await self.db.execute(
+                update(Message)
+                .where(
+                    Message.account_id == self.account.id,
+                    Message.remote_id.in_(list(deleted_ids)),
+                )
+                .values(is_trashed=True)
+            )
+
+        # Advance pointer
+        if latest_history_id:
+            self.account.gmail_history_id = latest_history_id
+        self.account.last_synced_at = datetime.now(timezone.utc)
+        await self.db.commit()
+
+        logger.info(
+            "History sync %s: new=%d labeled=%d deleted=%d",
+            self.account.email_address, new_count, len(label_changes), len(deleted_ids),
+        )
+        return new_count
 
     async def _fetch_message(self, gmail_id: str) -> Optional[dict]:
         """Fetch a single message with full content from Gmail API."""
@@ -434,6 +584,27 @@ class GmailSyncService:
                 list_id=list_id,
             )
             self.db.add(link)
+
+    async def batch_modify_labels(
+        self,
+        remote_ids: list[str],
+        add_labels: list[str] = None,
+        remove_labels: list[str] = None,
+    ) -> None:
+        """Apply label changes to a batch of Gmail messages via batchModify."""
+        remote_ids = [r for r in (remote_ids or []) if r]
+        if not remote_ids:
+            return
+        payload = {"ids": remote_ids}
+        if add_labels:
+            payload["addLabelIds"] = add_labels
+        if remove_labels:
+            payload["removeLabelIds"] = remove_labels
+        await self._request(
+            "POST",
+            f"{GMAIL_API}/messages/batchModify",
+            json=payload,
+        )
 
     async def fetch_attachment_content(self, attachment_remote_id: str) -> bytes:
         """Download attachment content from Gmail API."""

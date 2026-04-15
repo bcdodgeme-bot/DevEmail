@@ -22,7 +22,6 @@
   align-items: flex-start;
   gap: 12px;
   padding: 14px 16px;
-  cursor: pointer;
   user-select: none;
 }
 
@@ -45,6 +44,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  cursor: pointer;
 }
 
 .topLine {
@@ -68,6 +68,19 @@
   border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.viaBadge {
+  font-size: 10px;
+  font-weight: 500;
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .date {

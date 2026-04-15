@@ -321,14 +321,20 @@ async def archive_thread(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Archive all messages in a thread."""
+    """Archive all messages in a thread locally + propagate to Gmail."""
     thread = await _get_thread_or_404(db, user.id, thread_id)
     result = await db.execute(
         select(Message).where(Message.thread_id == thread.id)
     )
-    for msg in result.scalars().all():
+    messages = list(result.scalars().all())
+    for msg in messages:
         msg.is_archived = True
     await db.commit()
+
+    await _propagate_label_change(
+        db, user.id, messages,
+        remove_labels=["INBOX"],
+    )
     return {"status": "ok"}
 
 
@@ -338,14 +344,21 @@ async def trash_thread(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Move all messages in a thread to trash."""
+    """Move all messages in a thread to trash locally + propagate to Gmail."""
     thread = await _get_thread_or_404(db, user.id, thread_id)
     result = await db.execute(
         select(Message).where(Message.thread_id == thread.id)
     )
-    for msg in result.scalars().all():
+    messages = list(result.scalars().all())
+    for msg in messages:
         msg.is_trashed = True
     await db.commit()
+
+    await _propagate_label_change(
+        db, user.id, messages,
+        add_labels=["TRASH"],
+        remove_labels=["INBOX"],
+    )
     return {"status": "ok"}
 
 
@@ -733,6 +746,59 @@ async def compose_message(
 
 # --- Helpers ---
 
+async def _propagate_label_change(
+    db: AsyncSession,
+    user_id,
+    messages: list[Message],
+    add_labels: list[str] = None,
+    remove_labels: list[str] = None,
+):
+    """Fan out label changes (archive/trash) to each provider.
+    Failures are logged but do not raise — local state is already committed,
+    and a future sync via history.list will reconcile if the remote still diverges.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Group messages with remote_ids by account_id
+    by_account: dict = {}
+    for m in messages:
+        if not m.remote_id:
+            continue
+        by_account.setdefault(m.account_id, []).append(m.remote_id)
+
+    if not by_account:
+        return
+
+    account_result = await db.execute(
+        select(Account).where(
+            Account.id.in_(by_account.keys()),
+            Account.user_id == user_id,
+        )
+    )
+    for account in account_result.scalars().all():
+        remote_ids = by_account.get(account.id, [])
+        if not remote_ids:
+            continue
+        if account.provider == "gmail":
+            from app.services.gmail_sync import GmailSyncService
+            gmail = GmailSyncService(db, account)
+            try:
+                await gmail.batch_modify_labels(
+                    remote_ids,
+                    add_labels=add_labels,
+                    remove_labels=remove_labels,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to propagate label change to Gmail for %s: %s",
+                    account.email_address, e,
+                )
+            finally:
+                await gmail._close()
+        # Stalwart/IMAP propagation deferred to a later phase
+
+
 async def _get_thread_or_404(db, user_id, thread_id: str) -> Thread:
     result = await db.execute(
         select(Thread).where(Thread.id == thread_id, Thread.user_id == user_id)
@@ -796,7 +862,7 @@ def _to_thread_response(t: Thread) -> ThreadResponse:
 
 def _to_thread_detail_response(t: Thread) -> ThreadDetailResponse:
     base = _to_thread_response(t)
-    messages = sorted(t.messages or [], key=lambda m: m.received_at or m.created_at)
+    messages = sorted(t.messages or [], key=lambda m: m.received_at or m.created_at, reverse=True)
 
     return ThreadDetailResponse(
         **base.model_dump(),

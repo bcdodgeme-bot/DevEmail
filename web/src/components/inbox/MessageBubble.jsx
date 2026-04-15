@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useSelector } from 'react-redux';
 import { ChevronDown, ChevronUp, Paperclip, Download } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { getAvatarGradient } from '../../utils/avatarColor';
 import { formatRelativeDate } from '../../utils/formatDate';
 import { formatBytes } from '../../utils/formatBytes';
 import { apiFetch } from '../../utils/api';
+import { selectAccounts } from '../../store/accountsSlice';
 import styles from './MessageBubble.module.css';
 
 function getInitials(name, address) {
@@ -17,10 +19,17 @@ function getInitials(name, address) {
   return '?';
 }
 
-function formatAddressList(addresses) {
+function formatAddressList(addresses, { full = false } = {}) {
   if (!addresses || !addresses.length) return '';
   return addresses
-    .map((a) => (typeof a === 'string' ? a : a.name || a.address || a.email))
+    .map((a) => {
+      if (typeof a === 'string') return a;
+      const name = a.name;
+      const addr = a.address || a.email;
+      if (full && name && addr) return `${name} <${addr}>`;
+      if (full && addr) return addr;
+      return name || addr || '';
+    })
     .join(', ');
 }
 
@@ -46,14 +55,18 @@ function sanitizeHtml(html) {
 
 export default function MessageBubble({ message }) {
   const [expanded, setExpanded] = useState(true);
+  const [headersExpanded, setHeadersExpanded] = useState(false);
   const [downloading, setDownloading] = useState(null);
+  const accounts = useSelector(selectAccounts);
 
   const initials = getInitials(message.from_name, message.from_address);
   const gradient = getAvatarGradient(message.from_name || message.from_address || '');
   const displayName = message.from_name || message.from_address || 'Unknown';
   const dateStr = formatRelativeDate(message.received_at || message.sent_at || message.created_at);
-  const toStr = formatAddressList(message.to_addresses);
-  const ccStr = formatAddressList(message.cc_addresses);
+  const toStr = formatAddressList(message.to_addresses, { full: headersExpanded });
+  const ccStr = formatAddressList(message.cc_addresses, { full: headersExpanded });
+  const receivingAccount = accounts.find((a) => a.id === message.account_id);
+  const viaLabel = receivingAccount && !message.is_sent ? receivingAccount.email_address : null;
 
   const handleAttachmentDownload = async (attachment) => {
     setDownloading(attachment.id);
@@ -82,22 +95,52 @@ export default function MessageBubble({ message }) {
   return (
     <div className={`${styles.bubble} ${message.is_draft ? styles.draft : ''}`}>
       {/* Header row */}
-      <div className={styles.header} onClick={() => setExpanded(!expanded)}>
+      <div className={styles.header}>
         <div className={styles.avatar} style={{ background: gradient }}>
           {initials}
         </div>
-        <div className={styles.meta}>
+        <div
+          className={styles.meta}
+          onClick={(e) => {
+            // Clicking the recipient/header area toggles full-address display,
+            // without collapsing the message.
+            e.stopPropagation();
+            setHeadersExpanded((v) => !v);
+          }}
+          role="button"
+          tabIndex={0}
+        >
           <div className={styles.topLine}>
-            <span className={styles.sender}>{displayName}</span>
+            <span className={styles.sender}>
+              {headersExpanded && message.from_address
+                ? `${displayName} <${message.from_address}>`
+                : displayName}
+            </span>
             {message.is_draft && <span className={styles.draftBadge}>Draft</span>}
+            {viaLabel && (
+              <span className={styles.viaBadge} title={`Received by ${viaLabel}`}>
+                via {viaLabel}
+              </span>
+            )}
             <span className={styles.date}>{dateStr}</span>
           </div>
-          <div className={styles.recipients}>
+          <div
+            className={styles.recipients}
+            style={headersExpanded ? { whiteSpace: 'normal' } : undefined}
+          >
             {toStr && <span>To: {toStr}</span>}
             {ccStr && <span className={styles.cc}> · Cc: {ccStr}</span>}
           </div>
         </div>
-        <button className={styles.expandBtn}>
+        <button
+          className={styles.expandBtn}
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          title={expanded ? 'Collapse message' : 'Expand message'}
+          type="button"
+        >
           {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
       </div>

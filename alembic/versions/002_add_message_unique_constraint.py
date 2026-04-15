@@ -1,6 +1,7 @@
 """add unique constraint on messages(account_id, remote_id)
 
 Revision ID: add_message_unique_constraint
+Revises: add_password_hash
 Create Date: 2026-03-15
 
 Prevents duplicate message sync when concurrent syncs run.
@@ -11,9 +12,8 @@ are unaffected.
 from typing import Sequence, Union
 from alembic import op
 
-
 revision: str = 'add_message_unique_constraint'
-down_revision: Union[str, None] = None  # <-- UPDATE to your latest revision ID
+down_revision: Union[str, None] = 'add_password_hash'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -30,7 +30,6 @@ def upgrade() -> None:
         )
         AND remote_id IS NOT NULL
     """)
-
     op.create_unique_constraint(
         'uq_messages_account_remote',
         'messages',
