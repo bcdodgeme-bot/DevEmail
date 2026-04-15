@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     GOOGLE_REDIRECT_URI: str = "https://devemail.damnitcarl.dev/api/auth/google/callback"
 
+    # Syntax Prime integration (AI draft-reply assistant)
+    SYNTAX_URL: Optional[str] = None
+
     # App
     APP_NAME: str = "Unified Inbox"
     APP_URL: str = "https://devemail.damnitcarl.dev"

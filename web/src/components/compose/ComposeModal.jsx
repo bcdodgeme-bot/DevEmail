@@ -6,6 +6,7 @@ import {
   Maximize2,
   Send,
   Paperclip,
+  Sparkles,
 } from 'lucide-react';
 import { selectAccounts, selectDefaultAccount, fetchAccounts } from '../../store/accountsSlice';
 import { archiveThread } from '../../store/inboxSlice';
@@ -74,6 +75,7 @@ export default function ComposeModal({
   const [isMinimized, setIsMinimized] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isDrafting, setIsDrafting] = useState(false);
   const [error, setError] = useState(null);
 
   // Draft tracking for auto-save
@@ -313,6 +315,54 @@ export default function ComposeModal({
 
   const handleSaveDraft = () => saveDraft(false).then(resetAndClose);
 
+  /** Ask Syntax Prime (via DevEmail proxy) to draft a reply from thread context. */
+  const handleDraftWithSyntax = async () => {
+    if (!replyTo) return;
+
+    const received = (replyTo.messages || []).find((m) => !m.is_sent && !m.is_draft);
+    const sourceMsg = received || (replyTo.messages || [])[0] || replyTo;
+    const senderEmail =
+      sourceMsg.from_address || replyTo.from_address || replyTo.latest_from_address || '';
+    const senderName =
+      sourceMsg.from_name || replyTo.from_name || replyTo.latest_from_name || '';
+
+    // messages array is newest-first; take up to 3, convert each to plain text
+    const threadMessages = (replyTo.messages || [])
+      .slice(0, 3)
+      .map((m) => decodeEntities(stripHtml(m.body_html || '') || m.body_text || ''))
+      .filter(Boolean);
+
+    if (threadMessages.length === 0) {
+      const fallback = decodeEntities(
+        stripHtml(replyTo.body_html || '') || replyTo.body_text || replyTo.latest_snippet || ''
+      );
+      if (fallback) threadMessages.push(fallback);
+    }
+
+    setIsDrafting(true);
+    setError(null);
+    try {
+      const res = await apiFetch('/syntax/draft-reply', {
+        method: 'POST',
+        body: JSON.stringify({
+          subject: replyTo.subject || '',
+          sender_name: senderName,
+          sender_email: senderEmail,
+          thread_messages: threadMessages,
+        }),
+      });
+      if (typeof res?.draft === 'string') {
+        setBodyText(res.draft);
+      } else {
+        setError('Syntax returned an empty draft');
+      }
+    } catch (err) {
+      setError(err.message || 'Could not reach Syntax');
+    } finally {
+      setIsDrafting(false);
+    }
+  };
+
   const resetAndClose = () => {
     clearInterval(autosaveRef.current);
     setTo([]);
@@ -524,6 +574,18 @@ export default function ComposeModal({
               </button>
 
               <div className={styles.footerRight}>
+                {replyTo && (
+                  <button
+                    className={styles.footerBtn}
+                    onClick={handleDraftWithSyntax}
+                    disabled={isDrafting}
+                    title="Draft this reply with Syntax"
+                    type="button"
+                  >
+                    <Sparkles size={14} />
+                    <span>{isDrafting ? 'Drafting…' : 'Draft with Syntax'}</span>
+                  </button>
+                )}
                 <button
                   className={styles.footerBtn}
                   onClick={() => saveDraft(false).then(resetAndClose)}
