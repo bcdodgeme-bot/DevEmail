@@ -48,16 +48,17 @@ async def draft_reply(
     user: User = Depends(get_current_user),
 ):
     """Proxy a draft-reply request to Syntax Prime."""
-    if not settings.SYNTAX_URL:
+    if not settings.SYNTAX_URL or not settings.SYNTAX_PRIME_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Syntax Prime integration is not configured",
         )
 
     url = f"{settings.SYNTAX_URL.rstrip('/')}/api/draft-reply"
+    headers = {"X-API-Key": settings.SYNTAX_PRIME_KEY}
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload.model_dump())
+            resp = await client.post(url, json=payload.model_dump(), headers=headers)
     except httpx.RequestError as e:
         logger.error("Syntax Prime request failed: %s", e)
         raise HTTPException(

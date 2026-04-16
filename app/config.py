@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # Syntax Prime integration (AI draft-reply assistant)
     SYNTAX_URL: Optional[str] = None
+    SYNTAX_PRIME_KEY: Optional[str] = None
 
     # App
     APP_NAME: str = "Unified Inbox"
