@@ -534,33 +534,42 @@ class GmailSyncService:
         return thread
 
     async def _store_attachment_metadata(self, message: Message, payload: dict):
-        """Store attachment metadata from message parts."""
-        parts = payload.get("parts", [])
-        for part in parts:
-            filename = part.get("filename")
-            if filename:
-                attachment = Attachment(
-                    message_id=message.id,
-                    filename=filename,
-                    content_type=part.get("mimeType"),
-                    size_bytes=int(part.get("body", {}).get("size", 0)),
-                    remote_id=part.get("body", {}).get("attachmentId"),
-                )
-                self.db.add(attachment)
+        """Store attachment metadata from message parts, including inline images
+        (parts with a Content-ID header, typically referenced via cid: URLs)."""
+        def walk(parts: list[dict]):
+            for part in parts:
+                filename = part.get("filename")
+                headers = {
+                    (h.get("name") or "").lower(): h.get("value", "")
+                    for h in part.get("headers", [])
+                }
+                content_id = headers.get("content-id", "").strip().strip("<>")
+                disposition = headers.get("content-disposition", "").lower()
+                mime = part.get("mimeType", "") or ""
+                attachment_id = part.get("body", {}).get("attachmentId")
 
-            # Recurse into nested parts
-            if "parts" in part:
-                for sub in part["parts"]:
-                    fname = sub.get("filename")
-                    if fname:
-                        attachment = Attachment(
-                            message_id=message.id,
-                            filename=fname,
-                            content_type=sub.get("mimeType"),
-                            size_bytes=int(sub.get("body", {}).get("size", 0)),
-                            remote_id=sub.get("body", {}).get("attachmentId"),
-                        )
-                        self.db.add(attachment)
+                is_inline = bool(
+                    content_id
+                    and attachment_id
+                    and (mime.startswith("image/") or "inline" in disposition)
+                )
+                has_file = bool(filename) and bool(attachment_id)
+
+                if has_file or is_inline:
+                    self.db.add(Attachment(
+                        message_id=message.id,
+                        filename=filename or content_id or "inline",
+                        content_type=mime or None,
+                        size_bytes=int(part.get("body", {}).get("size", 0) or 0),
+                        remote_id=attachment_id,
+                        content_id=content_id or None,
+                        is_inline=is_inline,
+                    ))
+
+                if "parts" in part:
+                    walk(part["parts"])
+
+        walk(payload.get("parts", []))
 
     async def _store_unsubscribe(self, message: Message, unsub_header: str, list_id: str = None):
         """Parse List-Unsubscribe header and store."""
@@ -705,11 +714,18 @@ def _extract_body(payload: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def _has_attachments(payload: dict) -> bool:
-    """Check if a message payload contains attachments."""
+    """Check if a message payload contains a non-inline attachment. Inline
+    images (Content-Disposition: inline, referenced via cid:) don't count."""
     parts = payload.get("parts", [])
     for part in parts:
         if part.get("filename"):
-            return True
+            headers = {
+                (h.get("name") or "").lower(): h.get("value", "")
+                for h in part.get("headers", [])
+            }
+            disposition = headers.get("content-disposition", "").lower()
+            if "inline" not in disposition:
+                return True
         if "parts" in part:
             if _has_attachments(part):
                 return True

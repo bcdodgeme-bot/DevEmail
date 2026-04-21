@@ -8,6 +8,7 @@ Sends email through the appropriate transport based on account type:
 
 import base64
 import logging
+import uuid
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import update as sa_update
+from app.config import settings
 from app.models.account import Account
 from app.models.signature import Signature
 from app.models.thread import Thread
@@ -30,6 +32,29 @@ from app.services.google_oauth import refresh_google_token
 logger = logging.getLogger(__name__)
 
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
+
+
+def _tracking_pixel_html(token: uuid.UUID) -> str:
+    """Build the 1x1 tracking pixel tag that fires when the recipient
+    loads the email. Placed right before </body> when possible."""
+    url = f"{settings.APP_URL.rstrip('/')}/api/track/open/{token}"
+    return (
+        f'<img src="{url}" width="1" height="1" alt="" '
+        f'style="display:block;width:1px;height:1px;border:0;" />'
+    )
+
+
+def _inject_tracking_pixel(body_html: Optional[str], token: uuid.UUID) -> Optional[str]:
+    """Append the tracking pixel to body_html. If the HTML has a closing
+    </body> tag, insert immediately before it; otherwise append to the end."""
+    if not body_html:
+        return body_html
+    pixel = _tracking_pixel_html(token)
+    lower = body_html.lower()
+    idx = lower.rfind("</body>")
+    if idx != -1:
+        return body_html[:idx] + pixel + body_html[idx:]
+    return body_html + pixel
 
 
 class EmailSendService:
@@ -82,6 +107,12 @@ class EmailSendService:
                 signature_id, body_html, body_text
             )
 
+        # Open tracking: mint a token and inject a 1x1 pixel into the HTML body.
+        # The pixel fires when the recipient's mail client loads images.
+        tracking_token = uuid.uuid4() if body_html else None
+        if tracking_token:
+            body_html = _inject_tracking_pixel(body_html, tracking_token)
+
         # Build the MIME message
         mime_msg = self._build_mime(
             to=to,
@@ -117,6 +148,7 @@ class EmailSendService:
             remote_id=remote_id,
             read_receipt=read_receipt,
             attachments=attachments,
+            tracking_token=tracking_token,
         )
 
         logger.info(f"Sent email via {self.account.provider} from {self.account.email_address} to {to}")
@@ -299,6 +331,7 @@ class EmailSendService:
         remote_id: Optional[str],
         read_receipt: bool,
         attachments: list[dict] = None,
+        tracking_token: Optional[uuid.UUID] = None,
     ) -> Message:
         """Store sent message in the local database."""
         now = datetime.now(timezone.utc)
@@ -351,6 +384,7 @@ class EmailSendService:
             is_draft=False,
             has_attachments=len(attachments) > 0,
             read_receipt_requested=read_receipt,
+            tracking_token=tracking_token,
             in_reply_to=in_reply_to,
             references=references,
             sent_at=now,

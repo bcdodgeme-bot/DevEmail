@@ -39,6 +39,9 @@ class Message(Base):
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
     read_receipt_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     read_receipt_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Unique token for the tracking pixel URL on sent mail (open tracking).
+    # Indirects message.id so the internal UUID isn't leaked in the pixel URL.
+    tracking_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), unique=True, index=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -49,3 +52,9 @@ class Message(Base):
     folder = relationship("Folder", back_populates="messages")
     attachments = relationship("Attachment", back_populates="message", lazy="selectin")
     unsubscribe_links = relationship("UnsubscribeLink", back_populates="message", lazy="selectin")
+    open_events = relationship(
+        "OpenEvent",
+        back_populates="message",
+        lazy="selectin",
+        order_by="OpenEvent.opened_at",
+    )

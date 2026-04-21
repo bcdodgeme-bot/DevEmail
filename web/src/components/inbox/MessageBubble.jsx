@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSelector } from 'react-redux';
-import { ChevronDown, ChevronUp, Paperclip, Download } from 'lucide-react';
+import { ChevronDown, ChevronUp, Paperclip, Download, Eye } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { getAvatarGradient } from '../../utils/avatarColor';
 import { formatRelativeDate } from '../../utils/formatDate';
@@ -8,6 +8,15 @@ import { formatBytes } from '../../utils/formatBytes';
 import { apiFetch } from '../../utils/api';
 import { selectAccounts } from '../../store/accountsSlice';
 import styles from './MessageBubble.module.css';
+
+// Force every link in an email body to open in a new tab, with rel protections
+// so the opened page can't access window.opener or leak the referrer.
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
 
 function getInitials(name, address) {
   if (name) {
@@ -67,6 +76,12 @@ export default function MessageBubble({ message }) {
   const ccStr = formatAddressList(message.cc_addresses, { full: headersExpanded });
   const receivingAccount = accounts.find((a) => a.id === message.account_id);
   const viaLabel = receivingAccount && !message.is_sent ? receivingAccount.email_address : null;
+  const seenAt = message.is_sent ? message.first_opened_at : null;
+  const seenTitle = seenAt
+    ? `Seen ${formatRelativeDate(seenAt)}${
+        message.open_count > 1 ? ` · opened ${message.open_count} times` : ''
+      }${message.last_opened_at && message.last_opened_at !== seenAt ? ` · last ${formatRelativeDate(message.last_opened_at)}` : ''}`
+    : null;
 
   const handleAttachmentDownload = async (attachment) => {
     setDownloading(attachment.id);
@@ -120,6 +135,12 @@ export default function MessageBubble({ message }) {
             {viaLabel && (
               <span className={styles.viaBadge} title={`Received by ${viaLabel}`}>
                 via {viaLabel}
+              </span>
+            )}
+            {seenAt && (
+              <span className={styles.seenBadge} title={seenTitle}>
+                <Eye size={10} />
+                Seen
               </span>
             )}
             <span className={styles.date}>{dateStr}</span>

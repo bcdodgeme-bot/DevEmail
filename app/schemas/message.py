@@ -57,6 +57,10 @@ class MessageDetailResponse(MessageResponse):
     is_trashed: bool
     read_receipt_requested: bool
     read_receipt_sent_at: Optional[datetime] = None
+    # Open tracking (only meaningful for is_sent messages)
+    open_count: int = 0
+    first_opened_at: Optional[datetime] = None
+    last_opened_at: Optional[datetime] = None
     attachments: List[AttachmentResponse] = []
     created_at: datetime
 

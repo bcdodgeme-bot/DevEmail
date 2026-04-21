@@ -83,6 +83,22 @@
   text-overflow: ellipsis;
 }
 
+.seenBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  cursor: help;
+}
+
 .date {
   font-size: 11px;
   color: #64748b;

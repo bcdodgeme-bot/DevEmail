@@ -1,0 +1,82 @@
+.container {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  z-index: 10000;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 280px;
+  max-width: 420px;
+  padding: 10px 14px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(139, 92, 246, 0.32);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  color: #e2e8f0;
+  font-size: 13px;
+  pointer-events: auto;
+  animation: slideUp 0.18s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.undoBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #8b5cf6;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+
+.undoBtn:hover {
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.dismissBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.12s ease;
+}
+
+.dismissBtn:hover {
+  color: #cbd5e1;
+}

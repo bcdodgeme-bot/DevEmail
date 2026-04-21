@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { apiFetch } from '../utils/api';
+import { showToast } from './toastSlice';
 
 /* ── Async thunks ─────────────────────────────────────── */
 
@@ -48,12 +49,32 @@ export const archiveThread = createAsyncThunk(
   }
 );
 
-/** Trash a thread */
+/** Trash a thread — optimistically removes from list + fires Undo toast */
 export const trashThread = createAsyncThunk(
   'inbox/trashThread',
-  async (threadId) => {
+  async (threadId, { getState, dispatch }) => {
+    const state = getState();
+    const threadSnapshot = state.inbox.threads.find((t) => t.id === threadId);
+    const snapshotIndex = state.inbox.threads.findIndex((t) => t.id === threadId);
     await apiFetch(`/messages/threads/${threadId}/trash`, { method: 'PATCH' });
+    dispatch(
+      showToast({
+        message: 'Moved to trash',
+        undoKind: 'restoreThread',
+        undoPayload: { threadId, threadSnapshot, snapshotIndex },
+        duration: 5000,
+      })
+    );
     return { threadId };
+  }
+);
+
+/** Undo a trash — restores the thread on the server + re-inserts locally */
+export const restoreThread = createAsyncThunk(
+  'inbox/restoreThread',
+  async ({ threadId, threadSnapshot, snapshotIndex }) => {
+    await apiFetch(`/messages/threads/${threadId}/restore`, { method: 'PATCH' });
+    return { threadId, threadSnapshot, snapshotIndex };
   }
 );
 
@@ -212,6 +233,18 @@ const inboxSlice = createSlice({
     /* ── trashThread — remove from list, advance to next ── */
     builder.addCase(trashThread.fulfilled, (state, action) => {
       advanceAfterRemoval(state, action.payload.threadId);
+    });
+
+    /* ── restoreThread — re-insert at original position ── */
+    builder.addCase(restoreThread.fulfilled, (state, action) => {
+      const { threadId, threadSnapshot, snapshotIndex } = action.payload;
+      if (!threadSnapshot) return;
+      if (state.threads.some((t) => t.id === threadId)) return;
+      const insertAt = Math.min(
+        Math.max(snapshotIndex ?? 0, 0),
+        state.threads.length
+      );
+      state.threads.splice(insertAt, 0, threadSnapshot);
     });
 
     /* ── snoozeThread — remove from inbox list ── */

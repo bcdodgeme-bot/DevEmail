@@ -250,6 +250,8 @@ async def get_thread(
             .selectinload(Message.attachments),
             selectinload(Thread.messages)
             .selectinload(Message.unsubscribe_links),
+            selectinload(Thread.messages)
+            .selectinload(Message.open_events),
         )
     )
     thread = result.scalar_one_or_none()
@@ -362,6 +364,30 @@ async def trash_thread(
     return {"status": "ok"}
 
 
+@router.patch("/threads/{thread_id}/restore")
+async def restore_thread(
+    thread_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Undo trash: untrash all messages in a thread + propagate to Gmail."""
+    thread = await _get_thread_or_404(db, user.id, thread_id)
+    result = await db.execute(
+        select(Message).where(Message.thread_id == thread.id)
+    )
+    messages = list(result.scalars().all())
+    for msg in messages:
+        msg.is_trashed = False
+    await db.commit()
+
+    await _propagate_label_change(
+        db, user.id, messages,
+        add_labels=["INBOX"],
+        remove_labels=["TRASH"],
+    )
+    return {"status": "ok"}
+
+
 @router.post("/threads/{thread_id}/snooze")
 async def snooze_thread(
     thread_id: str,
@@ -428,6 +454,60 @@ async def mark_message_read(
     msg.is_read = True
     await db.commit()
     return {"is_read": True}
+
+
+# --- Inline Image Serving (cid: references in HTML email bodies) ---
+
+@router.get("/{message_id}/inline/{content_id}")
+async def get_inline_image(
+    message_id: str,
+    content_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve an inline image referenced by cid: in the message body.
+    The body rewriter swaps cid:<id> to /api/messages/{id}/inline/{id}."""
+    msg = await _get_message_or_404(db, user.id, message_id)
+
+    result = await db.execute(
+        select(Attachment).where(
+            Attachment.message_id == msg.id,
+            Attachment.content_id == content_id,
+        )
+    )
+    attachment = result.scalar_one_or_none()
+    if not attachment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inline image not found")
+
+    result = await db.execute(
+        select(Account).where(Account.id == msg.account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    if account.provider == "gmail" and attachment.remote_id:
+        from app.services.gmail_sync import GmailSyncService
+        gmail = GmailSyncService(db, account)
+        try:
+            content = await gmail.fetch_attachment_content(attachment.remote_id)
+        finally:
+            await gmail._close()
+    elif attachment.storage_path:
+        import aiofiles
+        try:
+            async with aiofiles.open(attachment.storage_path, "rb") as f:
+                content = await f.read()
+        except FileNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inline image file missing")
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inline image content unavailable")
+
+    return Response(
+        content=content,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 # --- Attachment Download ---
@@ -818,7 +898,10 @@ async def _get_message_or_404(db, user_id, message_id: str) -> Message:
                 select(Account.id).where(Account.user_id == user_id)
             ),
         )
-        .options(selectinload(Message.attachments))
+        .options(
+            selectinload(Message.attachments),
+            selectinload(Message.open_events),
+        )
     )
     msg = result.scalar_one_or_none()
     if not msg:
@@ -872,7 +955,44 @@ def _to_thread_detail_response(t: Thread) -> ThreadDetailResponse:
     )
 
 
+_CID_IMG_PATTERN = re.compile(
+    r'(?i)(<img\b[^>]*?\bsrc\s*=\s*["\']?)cid:([^"\'\s>]+)',
+)
+
+_TRACKING_PIXEL_PATTERN = re.compile(
+    r'(?is)<img\b[^>]*\bsrc\s*=\s*["\'][^"\']*?/api/track/open/[^"\']*["\'][^>]*>',
+)
+
+
+def _rewrite_cid_urls(body_html: str | None, message_id: str) -> str | None:
+    """Rewrite cid: img references to the inline-serving endpoint so the
+    browser can actually fetch them."""
+    if not body_html:
+        return body_html
+    return _CID_IMG_PATTERN.sub(
+        lambda m: f'{m.group(1)}/api/messages/{message_id}/inline/{m.group(2)}',
+        body_html,
+    )
+
+
+def _strip_tracking_pixel(body_html: str | None) -> str | None:
+    """Remove the outbound tracking pixel from body_html before returning to
+    the sender's own session. Prevents the owner from firing open events on
+    their own sent mail every time they view the thread."""
+    if not body_html:
+        return body_html
+    return _TRACKING_PIXEL_PATTERN.sub("", body_html)
+
+
 def _to_message_detail(m: Message) -> MessageDetailResponse:
+    body_html = _strip_tracking_pixel(m.body_html)
+    body_html = _rewrite_cid_urls(body_html, str(m.id))
+
+    open_events = getattr(m, "open_events", None) or []
+    open_count = len(open_events)
+    first_opened_at = open_events[0].opened_at if open_events else None
+    last_opened_at = open_events[-1].opened_at if open_events else None
+
     return MessageDetailResponse(
         id=str(m.id),
         thread_id=str(m.thread_id),
@@ -885,7 +1005,7 @@ def _to_message_detail(m: Message) -> MessageDetailResponse:
         bcc_addresses=m.bcc_addresses or [],
         subject=m.subject,
         snippet=m.snippet,
-        body_html=m.body_html,
+        body_html=body_html,
         body_text=m.body_text,
         message_id_header=m.message_id_header,
         in_reply_to=m.in_reply_to,
@@ -900,6 +1020,9 @@ def _to_message_detail(m: Message) -> MessageDetailResponse:
         read_receipt_sent_at=m.read_receipt_sent_at,
         received_at=m.received_at,
         sent_at=m.sent_at,
+        open_count=open_count,
+        first_opened_at=first_opened_at,
+        last_opened_at=last_opened_at,
         attachments=[
             AttachmentResponse(
                 id=str(a.id),
@@ -907,7 +1030,7 @@ def _to_message_detail(m: Message) -> MessageDetailResponse:
                 content_type=a.content_type,
                 size_bytes=a.size_bytes,
             )
-            for a in (m.attachments or [])
+            for a in (m.attachments or []) if not a.is_inline
         ],
         created_at=m.created_at,
     )

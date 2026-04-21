@@ -6,6 +6,7 @@ import StatusBar from './StatusBar';
 import ComposeModal from '../compose/ComposeModal';
 import CommandPalette from '../common/CommandPalette';
 import SearchModal from '../common/SearchModal';
+import ToastContainer from '../common/Toast';
 import { fetchAccounts, selectAccounts } from '../../store/accountsSlice';
 import {
   fetchThreads,
@@ -115,6 +116,9 @@ export default function AppShell() {
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
       />
+
+      {/* Toast notifications (Undo, etc.) */}
+      <ToastContainer />
     </div>
   );
 }
