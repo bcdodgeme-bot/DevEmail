@@ -317,10 +317,15 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
         db.add(new_message)
 
         # Update thread atomically
+        # synchronize_session=False: the SQL expression in .values() isn't
+        # Python-evaluable, so default "auto" mode falls back to "fetch" and
+        # expires the in-session `thread`. The next attribute read would
+        # then trigger an implicit async refresh and raise greenlet_spawn.
         await db.execute(
             update(Thread)
             .where(Thread.id == thread.id)
             .values(message_count=Thread.message_count + 1)
+            .execution_options(synchronize_session=False)
         )
         if date and (thread.last_message_at is None or date > thread.last_message_at):
             thread.last_message_at = date

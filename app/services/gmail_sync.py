@@ -65,6 +65,9 @@ class GmailSyncService:
             response = await http.request(method, url, headers=headers, **kwargs)
 
         response.raise_for_status()
+        # 204 No Content (e.g. batchModify on success) has no body to decode.
+        if response.status_code == 204 or not response.content:
+            return {}
         return response.json()
 
     async def _refresh_token(self):
@@ -293,6 +296,7 @@ class GmailSyncService:
             except IntegrityError:
                 await self.db.rollback()
             except Exception as e:
+                await self.db.rollback()
                 logger.error("history messagesAdded: failed to store %s: %s", gmail_id, e)
 
         # Apply label changes to existing messages
@@ -447,12 +451,18 @@ class GmailSyncService:
         if has_attachments:
             await self._store_attachment_metadata(message, payload)
 
-        # Update thread atomically
+        # Update thread atomically. synchronize_session=False is required:
+        # the SQL expression `Thread.message_count + 1` isn't Python-evaluable,
+        # so the default "auto" mode falls back to "fetch" and expires the
+        # in-session `thread` instance. The next attribute read on `thread`
+        # would then trigger an implicit refresh — which raises greenlet_spawn
+        # in async sessions.
         from sqlalchemy import func as sqlfunc
         await self.db.execute(
             update(Thread)
             .where(Thread.id == thread.id)
             .values(message_count=Thread.message_count + 1)
+            .execution_options(synchronize_session=False)
         )
         if not thread.last_message_at or (received_at and received_at > thread.last_message_at):
             thread.last_message_at = received_at
