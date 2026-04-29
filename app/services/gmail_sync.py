@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,16 @@ class GmailSyncService:
     def __init__(self, db: AsyncSession, account: Account):
         self.db = db
         self.account = account
+        # Snapshot account fields as plain Python so we never read expired
+        # ORM attributes from within synchronous code paths (e.g. while
+        # constructing select()/Model(...) expressions). After any rollback
+        # on the shared session, ORM attributes on `self.account` are
+        # expired and reading them would trigger an implicit lazy refresh
+        # — which is async I/O invoked from sync code and raises
+        # greenlet_spawn. Plain attributes are immune.
+        self._account_id = account.id
+        self._user_id = account.user_id
+        self._email = account.email_address
         self.access_token = account.oauth_token
         self._http = None
 
@@ -72,8 +82,12 @@ class GmailSyncService:
 
     async def _refresh_token(self):
         """Refresh the Google access token and update the account record."""
+        # Re-attach: if the shared session was rolled back, self.account is
+        # expired. Refresh it before reading oauth_refresh_token in sync code.
+        await self.db.refresh(self.account)
+
         if not self.account.oauth_refresh_token:
-            raise Exception(f"No refresh token for account {self.account.email_address}")
+            raise Exception(f"No refresh token for account {self._email}")
 
         token_data = await refresh_google_token(self.account.oauth_refresh_token)
         self.access_token = token_data["access_token"]
@@ -85,7 +99,7 @@ class GmailSyncService:
             self.account.oauth_refresh_token = token_data["refresh_token"]
         await self.db.commit()
 
-        logger.info(f"Refreshed Google token for {self.account.email_address}")
+        logger.info(f"Refreshed Google token for {self._email}")
 
     # --- Label / Folder Sync ---
 
@@ -103,7 +117,7 @@ class GmailSyncService:
             # Check if folder already exists for this label
             result = await self.db.execute(
                 select(Folder).where(
-                    Folder.account_id == self.account.id,
+                    Folder.account_id == self._account_id,
                     Folder.remote_id == label_id,
                 )
             )
@@ -113,7 +127,7 @@ class GmailSyncService:
                 folder.name = label_name
             else:
                 folder = Folder(
-                    account_id=self.account.id,
+                    account_id=self._account_id,
                     name=label_name,
                     folder_type=label_type,
                     remote_id=label_id,
@@ -123,7 +137,7 @@ class GmailSyncService:
             synced.append(folder)
 
         await self.db.commit()
-        logger.info(f"Synced {len(synced)} labels for {self.account.email_address}")
+        logger.info(f"Synced {len(synced)} labels for {self._email}")
         return synced
 
     # --- Message Sync ---
@@ -161,7 +175,7 @@ class GmailSyncService:
                 break
 
         if not all_message_refs:
-            logger.info(f"No new messages for {self.account.email_address}")
+            logger.info(f"No new messages for {self._email}")
             return 0
 
         new_count = 0
@@ -182,11 +196,17 @@ class GmailSyncService:
                 logger.error(f"Failed to fetch message {gmail_id}: {e}")
                 continue
 
-        # Update last synced timestamp
-        self.account.last_synced_at = datetime.now(timezone.utc)
+        # Update last synced timestamp via SQL UPDATE — avoids reading or
+        # mutating expired ORM attributes on self.account.
+        await self.db.execute(
+            update(Account)
+            .where(Account.id == self._account_id)
+            .values(last_synced_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
         await self.db.commit()
 
-        logger.info(f"Synced {new_count} new messages for {self.account.email_address}")
+        logger.info(f"Synced {new_count} new messages for {self._email}")
         return new_count
 
     async def sync_incremental(self) -> int:
@@ -202,22 +222,34 @@ class GmailSyncService:
         Otherwise fall back to the older after:<epoch> query and seed the
         gmail_history_id from the most recent message for next time.
         """
-        if self.account.gmail_history_id:
+        # Read account state via direct SELECT — never via expired ORM attrs.
+        row = (await self.db.execute(
+            select(Account.gmail_history_id, Account.last_synced_at)
+            .where(Account.id == self._account_id)
+        )).one()
+        gmail_history_id, last_synced_at = row
+
+        if gmail_history_id:
             try:
-                return await self._sync_via_history()
+                return await self._sync_via_history(gmail_history_id)
             except Exception as e:
                 # 404 = historyId too old (> ~7 days). Full resync below.
                 logger.warning(
                     "history.list failed for %s (%s) — falling back to full incremental",
-                    self.account.email_address, e,
+                    self._email, e,
                 )
-                self.account.gmail_history_id = None
+                await self.db.execute(
+                    update(Account)
+                    .where(Account.id == self._account_id)
+                    .values(gmail_history_id=None)
+                    .execution_options(synchronize_session=False)
+                )
                 await self.db.commit()
 
         # Legacy / first-run path
         query = None
-        if self.account.last_synced_at:
-            epoch = int(self.account.last_synced_at.timestamp())
+        if last_synced_at:
+            epoch = int(last_synced_at.timestamp())
             query = f"after:{epoch}"
 
         new_count = await self.sync_messages(query=query)
@@ -230,14 +262,18 @@ class GmailSyncService:
             data = await self._request("GET", f"{GMAIL_API}/profile")
             hid = data.get("historyId")
             if hid:
-                self.account.gmail_history_id = str(hid)
+                await self.db.execute(
+                    update(Account)
+                    .where(Account.id == self._account_id)
+                    .values(gmail_history_id=str(hid))
+                    .execution_options(synchronize_session=False)
+                )
                 await self.db.commit()
         except Exception as e:
-            logger.warning("Failed to seed gmail_history_id for %s: %s", self.account.email_address, e)
+            logger.warning("Failed to seed gmail_history_id for %s: %s", self._email, e)
 
-    async def _sync_via_history(self) -> int:
+    async def _sync_via_history(self, start_id: str) -> int:
         """Apply Gmail history records since gmail_history_id."""
-        start_id = self.account.gmail_history_id
         page_token = None
         new_count = 0
         latest_history_id = start_id
@@ -324,7 +360,7 @@ class GmailSyncService:
                 await self.db.execute(
                     update(Message)
                     .where(
-                        Message.account_id == self.account.id,
+                        Message.account_id == self._account_id,
                         Message.remote_id == remote_id,
                     )
                     .values(**values)
@@ -335,21 +371,28 @@ class GmailSyncService:
             await self.db.execute(
                 update(Message)
                 .where(
-                    Message.account_id == self.account.id,
+                    Message.account_id == self._account_id,
                     Message.remote_id.in_(list(deleted_ids)),
                 )
                 .values(is_trashed=True)
             )
 
-        # Advance pointer
+        # Advance pointer via SQL UPDATE — never touch the (possibly expired)
+        # self.account ORM instance.
+        account_values = {"last_synced_at": datetime.now(timezone.utc)}
         if latest_history_id:
-            self.account.gmail_history_id = latest_history_id
-        self.account.last_synced_at = datetime.now(timezone.utc)
+            account_values["gmail_history_id"] = latest_history_id
+        await self.db.execute(
+            update(Account)
+            .where(Account.id == self._account_id)
+            .values(**account_values)
+            .execution_options(synchronize_session=False)
+        )
         await self.db.commit()
 
         logger.info(
             "History sync %s: new=%d labeled=%d deleted=%d",
-            self.account.email_address, new_count, len(label_changes), len(deleted_ids),
+            self._email, new_count, len(label_changes), len(deleted_ids),
         )
         return new_count
 
@@ -410,16 +453,18 @@ class GmailSyncService:
         # Find or create local folder based on primary label
         folder_id = await self._resolve_folder(label_ids)
 
-        # Find or create thread
-        thread = await self._resolve_thread(gmail_thread_id, subject, received_at)
+        # Find or create thread — returns ID only. We never hold a Thread ORM
+        # instance across awaits/commits, so an expired-attribute lazy refresh
+        # cannot be triggered from sync code.
+        thread_id = await self._resolve_thread(gmail_thread_id, subject, received_at)
 
         # Check for attachments
         has_attachments = _has_attachments(payload)
 
         # Create message
         message = Message(
-            thread_id=thread.id,
-            account_id=self.account.id,
+            thread_id=thread_id,
+            account_id=self._account_id,
             folder_id=folder_id,
             remote_id=gmail_id,
             remote_thread_id=gmail_thread_id,
@@ -451,23 +496,28 @@ class GmailSyncService:
         if has_attachments:
             await self._store_attachment_metadata(message, payload)
 
-        # Update thread atomically. synchronize_session=False is required:
-        # the SQL expression `Thread.message_count + 1` isn't Python-evaluable,
-        # so the default "auto" mode falls back to "fetch" and expires the
-        # in-session `thread` instance. The next attribute read on `thread`
-        # would then trigger an implicit refresh — which raises greenlet_spawn
-        # in async sessions.
-        from sqlalchemy import func as sqlfunc
+        # Update thread atomically with a single SQL UPDATE. We never read or
+        # mutate a Thread ORM instance — all changes are pure SQL expressions,
+        # so there is no in-session ORM state to be expired and no chance of
+        # an implicit lazy refresh raising greenlet_spawn.
+        thread_values = {
+            "message_count": Thread.message_count + 1,
+        }
+        if received_at is not None:
+            # GREATEST(last_message_at, received_at), NULL-safe via COALESCE.
+            thread_values["last_message_at"] = func.greatest(
+                func.coalesce(Thread.last_message_at, received_at),
+                received_at,
+            )
+        if is_starred:
+            # is_starred OR TRUE  →  TRUE; preserves existing TRUE otherwise.
+            thread_values["is_starred"] = True
         await self.db.execute(
             update(Thread)
-            .where(Thread.id == thread.id)
-            .values(message_count=Thread.message_count + 1)
+            .where(Thread.id == thread_id)
+            .values(**thread_values)
             .execution_options(synchronize_session=False)
         )
-        if not thread.last_message_at or (received_at and received_at > thread.last_message_at):
-            thread.last_message_at = received_at
-        if is_starred:
-            thread.is_starred = True
 
         # Commit the message, attachments, and thread update first
         await self.db.commit()
@@ -502,46 +552,47 @@ class GmailSyncService:
         if not target_label:
             return None
 
+        # Select only the ID column — avoids loading Folder ORM (and its
+        # selectin relationships), and avoids returning a session-attached
+        # ORM instance that could expire.
         result = await self.db.execute(
-            select(Folder).where(
-                Folder.account_id == self.account.id,
+            select(Folder.id).where(
+                Folder.account_id == self._account_id,
                 Folder.remote_id == target_label,
             )
         )
-        folder = result.scalar_one_or_none()
-        return folder.id if folder else None
+        return result.scalar_one_or_none()
 
-    async def _resolve_thread(self, gmail_thread_id: str, subject: str, received_at) -> Thread:
-        """Find or create a local thread for a Gmail thread ID."""
-        # First: look for existing messages from the same Gmail thread
+    async def _resolve_thread(self, gmail_thread_id: str, subject: str, received_at):
+        """Find or create a local thread. Returns the thread's UUID, never an
+        ORM instance — keeps _store_message free of Thread ORM mutations."""
+        # First: look for existing messages from the same Gmail thread.
         # Gmail groups messages by threadId, so if we already have a message
-        # from this Gmail thread, reuse that local thread
+        # from this Gmail thread, reuse that local thread.
         if gmail_thread_id:
             result = await self.db.execute(
-                select(Message).where(
-                    Message.account_id == self.account.id,
+                select(Message.thread_id).where(
+                    Message.account_id == self._account_id,
                     Message.remote_thread_id == gmail_thread_id,
                 ).limit(1)
             )
-            existing_msg = result.scalar_one_or_none()
-            if existing_msg:
-                thread_result = await self.db.execute(
-                    select(Thread).where(Thread.id == existing_msg.thread_id)
-                )
-                thread = thread_result.scalar_one_or_none()
-                if thread:
-                    return thread
+            existing_thread_id = result.scalar_one_or_none()
+            if existing_thread_id is not None:
+                return existing_thread_id
 
         # Create new thread
         thread = Thread(
-            user_id=self.account.user_id,
+            user_id=self._user_id,
             subject=subject,
             last_message_at=received_at,
             message_count=0,
         )
         self.db.add(thread)
         await self.db.flush()
-        return thread
+        new_id = thread.id
+        # Drop the ORM reference: we don't want to hold a Thread instance
+        # that could be expired by a later rollback in the same session.
+        return new_id
 
     async def _store_attachment_metadata(self, message: Message, payload: dict):
         """Store attachment metadata from message parts, including inline images
