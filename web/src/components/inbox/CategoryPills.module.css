@@ -1,0 +1,59 @@
+.pillRow {
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+  background: var(--bg-secondary, #0f1729);
+}
+
+.pill {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(139, 92, 246, 0.16));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pill:hover {
+  border-color: rgba(139, 92, 246, 0.32);
+  color: var(--text-primary, #e2e8f0);
+}
+
+.pill.active {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: var(--accent-purple, #a78bfa);
+  color: var(--accent-purple, #a78bfa);
+}
+
+.label {
+  letter-spacing: 0.01em;
+}
+
+.count {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(139, 92, 246, 0.18);
+  color: var(--accent-purple, #a78bfa);
+  padding: 1px 6px;
+  border-radius: 999px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.countZero {
+  opacity: 0.4;
+}
+
+.pill.active .count {
+  background: rgba(139, 92, 246, 0.28);
+}

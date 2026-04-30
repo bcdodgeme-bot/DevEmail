@@ -1,12 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { PenSquare } from 'lucide-react';
 import {
   fetchThreads,
   fetchThreadDetail,
   markRead,
   setView,
+  setCategory,
   selectThread,
   selectThreads,
   selectListStatus,
@@ -14,10 +15,20 @@ import {
   selectThreadDetail,
   selectDetailStatus,
   selectView,
+  selectCategoryFilter,
+  setMessageCategory,
 } from '../store/inboxSlice';
+import {
+  fetchCategoryCounts,
+  selectCategoryCounts,
+} from '../store/categorySlice';
+import { showToast } from '../store/toastSlice';
 import ThreadList from '../components/inbox/ThreadList';
 import ThreadDetail from '../components/inbox/ThreadDetail';
 import EmptyState from '../components/inbox/EmptyState';
+import CategoryPills from '../components/inbox/CategoryPills';
+import ContextMenu from '../components/inbox/ContextMenu';
+import MoveCategoryModal from '../components/inbox/MoveCategoryModal';
 import styles from './Inbox.module.css';
 
 /** Map route pathname → API view name */
@@ -35,10 +46,17 @@ const VIEW_LABELS = {
   trash: 'Trash',
 };
 
+/** Normalize ?category= URL value to one of: 'all' | 'people' | 'bulk'. */
+function normalizeCategoryParam(raw) {
+  if (raw === 'people' || raw === 'bulk') return raw;
+  return 'all';
+}
+
 export default function Inbox() {
   const dispatch = useDispatch();
   const location = useLocation();
   const { threadId: urlThreadId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const threads = useSelector(selectThreads);
   const listStatus = useSelector(selectListStatus);
@@ -46,6 +64,14 @@ export default function Inbox() {
   const threadDetail = useSelector(selectThreadDetail);
   const detailStatus = useSelector(selectDetailStatus);
   const currentView = useSelector(selectView);
+  const sliceCategory = useSelector(selectCategoryFilter);
+  const counts = useSelector(selectCategoryCounts);
+
+  const urlCategory = normalizeCategoryParam(searchParams.get('category'));
+
+  /* Local UI state for the context menu + move modal */
+  const [contextMenu, setContextMenu] = useState(null);   // { thread, anchor }
+  const [moveTarget, setMoveTarget] = useState(null);     // { thread, targetCategory }
 
   /* Sync view with route */
   const routeView = viewFromPath(location.pathname);
@@ -55,10 +81,26 @@ export default function Inbox() {
     }
   }, [routeView, currentView, dispatch]);
 
-  /* Fetch threads when view changes */
+  /* Sync the URL ?category= → Redux slice. URL is the source of truth. */
   useEffect(() => {
-    dispatch(fetchThreads({ view: currentView }));
-  }, [currentView, dispatch]);
+    const desired = urlCategory === 'all' ? null : urlCategory;
+    if (desired !== sliceCategory) {
+      dispatch(setCategory(desired));
+    }
+  }, [urlCategory, sliceCategory, dispatch]);
+
+  /* Fetch threads when view OR category changes */
+  useEffect(() => {
+    dispatch(fetchThreads({ view: currentView, category: urlCategory }));
+  }, [currentView, urlCategory, dispatch]);
+
+  /* Category counts: fetch on inbox mount and refresh whenever the
+     thread list reloads (read/unread toggles, moves, periodic syncs all
+     route through fetchThreads). */
+  useEffect(() => {
+    if (currentView !== 'inbox') return;
+    dispatch(fetchCategoryCounts());
+  }, [currentView, listStatus, dispatch]);
 
   /* Auto-poll inbox every 60s while tab is visible. Selection/detail pane are
      preserved because fetchThreads only rewrites the list — not the selected id. */
@@ -68,11 +110,13 @@ export default function Inbox() {
     const POLL_MS = 60_000;
     let intervalId = null;
 
+    const refresh = () => {
+      dispatch(fetchThreads({ view: 'inbox', category: urlCategory }));
+    };
+
     const start = () => {
       if (intervalId) return;
-      intervalId = setInterval(() => {
-        dispatch(fetchThreads({ view: 'inbox' }));
-      }, POLL_MS);
+      intervalId = setInterval(refresh, POLL_MS);
     };
     const stop = () => {
       if (intervalId) {
@@ -84,14 +128,13 @@ export default function Inbox() {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         // Refresh immediately on return, then resume polling
-        dispatch(fetchThreads({ view: 'inbox' }));
+        refresh();
         start();
       } else {
         stop();
       }
     };
 
-    // Kick off based on current visibility
     if (document.visibilityState === 'visible') start();
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -99,7 +142,7 @@ export default function Inbox() {
       stop();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [currentView, dispatch]);
+  }, [currentView, urlCategory, dispatch]);
 
   /* Deep-link: auto-select thread from URL param */
   useEffect(() => {
@@ -124,6 +167,68 @@ export default function Inbox() {
     window.dispatchEvent(new CustomEvent('devemail:compose', { detail: {} }));
   };
 
+  /* Pill / sidebar category change → write the URL param. The URL → slice
+     effect above will sync state. */
+  const handleCategoryChange = useCallback((next) => {
+    setSearchParams((prev) => {
+      const sp = new URLSearchParams(prev);
+      if (next === 'all') sp.delete('category');
+      else sp.set('category', next);
+      return sp;
+    });
+  }, [setSearchParams]);
+
+  const handleContextMenu = (thread, anchor) => {
+    setContextMenu({ thread, anchor });
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const openMoveModal = (thread, targetCategory) => {
+    setMoveTarget({ thread, targetCategory });
+  };
+
+  const closeMoveModal = () => setMoveTarget(null);
+
+  const handleConfirmMove = async ({ applyToDomain, applyToExisting }) => {
+    if (!moveTarget) return;
+    const { thread, targetCategory } = moveTarget;
+    const messageId = thread.latest_message_id;
+    if (!messageId) {
+      throw new Error('This thread has no underlying message id — cannot move.');
+    }
+    await dispatch(setMessageCategory({
+      messageId,
+      category: targetCategory,
+      applyToDomain,
+      applyToExisting,
+    })).unwrap();
+    dispatch(showToast({
+      message: targetCategory === 'bulk' ? 'Moved to Bulk' : 'Moved to People',
+      duration: 2500,
+    }));
+    setMoveTarget(null);
+  };
+
+  // Build context-menu items for the right-clicked thread.
+  const buildMenuItems = (thread) => {
+    // Inbox category is determined by the latest message — show the
+    // OPPOSITE move action so a click flips the bucket.
+    // We don't have message-level category on the thread payload, so we
+    // approximate via "everything I see in the bulk view is bulk." If
+    // the user is in 'all', default to "Move to Bulk" (the more common
+    // action for cleaning the inbox).
+    const inferred = urlCategory === 'bulk' ? 'bulk' : 'people';
+    const target = inferred === 'people' ? 'bulk' : 'people';
+    const targetLabel = target === 'bulk' ? 'Bulk' : 'People';
+    return [
+      {
+        label: `Move to ${targetLabel}`,
+        onClick: () => openMoveModal(thread, target),
+      },
+    ];
+  };
+
   return (
     <div className={styles.inbox}>
       {/* Left panel — thread list */}
@@ -144,25 +249,53 @@ export default function Inbox() {
             </button>
           </div>
         </div>
+
+        {/* Pill row sits above the list, only on Inbox view */}
+        {currentView === 'inbox' && (
+          <CategoryPills
+            activeCategory={urlCategory}
+            counts={counts}
+            onChange={handleCategoryChange}
+          />
+        )}
+
         <ThreadList
           threads={threads}
           status={listStatus}
           selectedId={selectedId}
           onSelect={handleSelectThread}
+          onContextMenu={currentView === 'inbox' ? handleContextMenu : undefined}
         />
       </div>
 
       {/* Right panel — thread detail or empty state */}
       <div className={styles.detailPanel}>
         {selectedId ? (
-          <ThreadDetail
-            thread={threadDetail}
-            status={detailStatus}
-          />
+          <ThreadDetail thread={threadDetail} status={detailStatus} />
         ) : (
-          <EmptyState view={currentView} />
+          <EmptyState
+            view={currentView}
+            listIsEmpty={threads.length === 0 && listStatus === 'succeeded'}
+            activeCategory={urlCategory}
+          />
         )}
       </div>
+
+      {contextMenu && (
+        <ContextMenu
+          anchor={contextMenu.anchor}
+          items={buildMenuItems(contextMenu.thread)}
+          onClose={closeContextMenu}
+        />
+      )}
+
+      <MoveCategoryModal
+        open={!!moveTarget}
+        fromAddress={moveTarget?.thread?.latest_from_address}
+        targetCategory={moveTarget?.targetCategory}
+        onCancel={closeMoveModal}
+        onConfirm={handleConfirmMove}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { Mail, Send, FileEdit, Trash2 } from 'lucide-react';
+import { Mail, Send, FileEdit, Trash2, Users, Megaphone } from 'lucide-react';
 import styles from './EmptyState.module.css';
 
 const VIEW_CONFIG = {
@@ -24,8 +24,36 @@ const VIEW_CONFIG = {
   },
 };
 
-export default function EmptyState({ view = 'inbox' }) {
-  const config = VIEW_CONFIG[view] || VIEW_CONFIG.inbox;
+const CATEGORY_EMPTY_CONFIG = {
+  people: {
+    icon: Users,
+    title: 'No people messages',
+    subtitle: 'Mail from your contacts will appear here.',
+  },
+  bulk: {
+    icon: Megaphone,
+    title: 'No bulk messages',
+    subtitle: 'Newsletters, transactional mail, and notifications will appear here.',
+  },
+};
+
+/**
+ * Empty / placeholder state for the right-hand detail pane.
+ *
+ * Props:
+ *   view            – inbox | sent | drafts | trash.
+ *   listIsEmpty     – when true and view==='inbox', show a category-aware
+ *                     empty message instead of the default "select a
+ *                     conversation" prompt. The user has nothing to select.
+ *   activeCategory  – 'people' | 'bulk' | null/'all'. Drives copy.
+ */
+export default function EmptyState({ view = 'inbox', listIsEmpty = false, activeCategory = null }) {
+  let config;
+  if (view === 'inbox' && listIsEmpty && (activeCategory === 'people' || activeCategory === 'bulk')) {
+    config = CATEGORY_EMPTY_CONFIG[activeCategory];
+  } else {
+    config = VIEW_CONFIG[view] || VIEW_CONFIG.inbox;
+  }
   const Icon = config.icon;
 
   return (

@@ -78,6 +78,7 @@ class ThreadResponse(BaseModel):
     # Preview info from latest message
     latest_from_name: Optional[str] = None
     latest_from_address: Optional[str] = None
+    latest_message_id: Optional[str] = None
     latest_snippet: Optional[str] = None
     has_unread: bool = False
     account_ids: List[str] = []

@@ -1,0 +1,130 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 16px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 440px;
+  background: var(--bg-secondary, #0f1729);
+  border: 1px solid var(--border, rgba(139, 92, 246, 0.16));
+  border-radius: 12px;
+  padding: 20px 22px;
+  color: var(--text-primary, #e2e8f0);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.body {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-secondary, #94a3b8);
+  line-height: 1.5;
+}
+
+.from {
+  font-size: 13px;
+  margin: 0 0 14px;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.fromLabel {
+  color: var(--text-muted, #64748b);
+}
+
+.fromAddress {
+  color: var(--text-primary, #e2e8f0);
+  word-break: break-all;
+}
+
+.checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.checkboxRow input[type="checkbox"] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-purple, #a78bfa);
+  cursor: pointer;
+}
+
+.checkboxRow.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin: 0 0 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cancelBtn,
+.confirmBtn {
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.cancelBtn {
+  background: transparent;
+  border: 1px solid var(--border, rgba(139, 92, 246, 0.16));
+  color: var(--text-secondary, #94a3b8);
+}
+
+.cancelBtn:hover:not(:disabled) {
+  border-color: rgba(139, 92, 246, 0.32);
+  color: var(--text-primary, #e2e8f0);
+}
+
+.confirmBtn {
+  background: var(--accent-purple, #a78bfa);
+  border: 1px solid var(--accent-purple, #a78bfa);
+  color: #1a1530;
+}
+
+.confirmBtn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.cancelBtn:disabled,
+.confirmBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

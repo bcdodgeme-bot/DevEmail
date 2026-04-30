@@ -15,7 +15,7 @@ function getInitials(name, address) {
   return '?';
 }
 
-function ThreadRow({ thread, isSelected, onSelect }) {
+function ThreadRow({ thread, isSelected, onSelect, onContextMenu }) {
   const dispatch = useDispatch();
 
   const initials = getInitials(thread.latest_from_name, thread.latest_from_address);
@@ -27,12 +27,20 @@ function ThreadRow({ thread, isSelected, onSelect }) {
     dispatch(toggleStar(thread.id));
   };
 
+  const handleContext = (e) => {
+    if (!onContextMenu) return;
+    e.preventDefault();
+    onContextMenu(thread, { x: e.clientX, y: e.clientY });
+  };
+
   return (
     <div
       className={`${styles.row} ${isSelected ? styles.selected : ''} ${thread.has_unread ? styles.unread : ''}`}
       onClick={() => onSelect(thread.id)}
+      onContextMenu={handleContext}
       role="button"
       tabIndex={0}
+      data-testid="thread-row"
     >
       {/* Avatar */}
       <div className={styles.avatar} style={{ background: gradient }}>
@@ -69,7 +77,7 @@ function ThreadRow({ thread, isSelected, onSelect }) {
   );
 }
 
-export default function ThreadList({ threads, status, selectedId, onSelect }) {
+export default function ThreadList({ threads, status, selectedId, onSelect, onContextMenu }) {
   if (status === 'loading' && threads.length === 0) {
     return (
       <div className={styles.statusWrap}>
@@ -103,6 +111,7 @@ export default function ThreadList({ threads, status, selectedId, onSelect }) {
           thread={thread}
           isSelected={thread.id === selectedId}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
         />
       ))}
     </div>

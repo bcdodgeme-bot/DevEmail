@@ -1,16 +1,44 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { apiFetch } from '../utils/api';
 import { showToast } from './toastSlice';
+import { setMessageCategory as apiSetMessageCategory } from '../api/classification';
+import { fetchCategoryCounts } from './categorySlice';
 
 /* ── Async thunks ─────────────────────────────────────── */
 
-/** Fetch thread list for any view (inbox, sent, drafts, trash) */
+/** Fetch thread list for any view (inbox, sent, drafts, trash). Optional
+ *  `category` (people|bulk) is forwarded to the inbox endpoint to filter
+ *  client-visible threads to those with at least one message in that
+ *  category. Omitted / 'all' means no filter. */
 export const fetchThreads = createAsyncThunk(
   'inbox/fetchThreads',
-  async ({ view = 'inbox', page = 1, perPage = 2000 } = {}) => {
+  async ({ view = 'inbox', page = 1, perPage = 2000, category } = {}) => {
     const endpoint = `/messages/${view}`;
     const params = new URLSearchParams({ page, per_page: perPage });
+    if (category && category !== 'all') {
+      params.set('category', category);
+    }
     return apiFetch(`${endpoint}?${params}`);
+  }
+);
+
+/** Manual move action — POST /api/messages/{id}/category. After server
+ *  applies the change (and the optional propagation), refresh the current
+ *  thread list and the category counts so pills + sidebar stay accurate. */
+export const setMessageCategory = createAsyncThunk(
+  'inbox/setMessageCategory',
+  async ({ messageId, category, applyToDomain = false, applyToExisting = false }, { dispatch, getState }) => {
+    const result = await apiSetMessageCategory(messageId, {
+      category, applyToDomain, applyToExisting,
+    });
+    const view = getState().inbox.view;
+    const currentCategory = getState().inbox.category;
+    // Refetch in parallel so the UI converges in one render.
+    await Promise.all([
+      dispatch(fetchThreads({ view, category: currentCategory })),
+      dispatch(fetchCategoryCounts()),
+    ]);
+    return result;
   }
 );
 
@@ -134,6 +162,10 @@ const inboxSlice = createSlice({
     page: 1,
     perPage: 50,
     view: 'inbox',          // inbox | sent | drafts | trash
+    /* People/Bulk filter — null/'all' = no filter. URL `?category=` is
+     * the source of truth; this slice mirrors it for consumers that
+     * read from Redux. */
+    category: null,
     listStatus: 'idle',     // idle | loading | succeeded | failed
     listError: null,
 
@@ -151,6 +183,14 @@ const inboxSlice = createSlice({
   reducers: {
     setView(state, action) {
       state.view = action.payload;
+      state.selectedThreadId = null;
+      state.threadDetail = null;
+    },
+    setCategory(state, action) {
+      // null | 'all' | 'people' | 'bulk'. Normalize 'all' → null so
+      // "no filter" has a single canonical shape inside the slice.
+      const next = action.payload;
+      state.category = (next === 'all' || !next) ? null : next;
       state.selectedThreadId = null;
       state.threadDetail = null;
     },
@@ -280,12 +320,13 @@ const inboxSlice = createSlice({
 
 /* ── Exports ──────────────────────────────────────────── */
 
-export const { setView, selectThread, clearSelection } = inboxSlice.actions;
+export const { setView, setCategory, selectThread, clearSelection } = inboxSlice.actions;
 
 export const selectThreads = (state) => state.inbox.threads;
 export const selectListStatus = (state) => state.inbox.listStatus;
 export const selectListError = (state) => state.inbox.listError;
 export const selectView = (state) => state.inbox.view;
+export const selectCategoryFilter = (state) => state.inbox.category;
 export const selectSelectedThreadId = (state) => state.inbox.selectedThreadId;
 export const selectThreadDetail = (state) => state.inbox.threadDetail;
 export const selectDetailStatus = (state) => state.inbox.detailStatus;

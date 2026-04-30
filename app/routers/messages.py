@@ -1123,6 +1123,7 @@ def _to_thread_response(t: Thread) -> ThreadResponse:
         snoozed_until=t.snoozed_until,
         latest_from_name=latest.from_name if latest else None,
         latest_from_address=latest.from_address if latest else None,
+        latest_message_id=str(latest.id) if latest else None,
         latest_snippet=latest.snippet if latest else None,
         has_unread=has_unread,
         account_ids=account_ids,
