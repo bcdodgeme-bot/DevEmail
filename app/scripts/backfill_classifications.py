@@ -164,67 +164,90 @@ async def backfill_user(
     replied_to = await build_replied_to_set(db, user_id)
     logger.info("User %s — replied-to set: %d addresses", user_id, len(replied_to))
 
-    # Iterate non-sent, non-archived messages on this user's accounts.
-    user_accounts = select(Account.id).where(Account.user_id == user_id)
-    msg_q = (
-        select(Message)
-        .where(
-            Message.account_id.in_(user_accounts),
-            Message.is_sent.is_(False),
-            Message.is_archived.is_(False),
-        )
-        .execution_options(yield_per=BATCH_SIZE)
-    )
+    # Keyset pagination over non-sent, non-archived messages on this user's
+    # accounts. Earlier versions used a streaming cursor (yield_per/stream),
+    # but commit-per-batch terminates the transaction and kills the cursor —
+    # so we materialize each 500-row page, commit, then page forward by
+    # `id > last_seen_id`. Using id (UUID) as the keyset key works because
+    # it's the PK and totally ordered; concurrent inserts of new rows at
+    # higher ids don't disrupt the scan, and we never re-visit a row.
+    user_accounts_subq = select(Account.id).where(Account.user_id == user_id).subquery()
 
     counts = Counter()
     sample = {"history": [], "headers": []}
-    pending_updates: list[tuple[uuid.UUID, str, str]] = []
     processed = 0
+    last_seen_id: Optional[uuid.UUID] = None
 
-    stream = await db.stream(msg_q)
-    async for msg in stream.scalars():
-        processed += 1
-        verdict = verdict_for_message(msg, replied_to)
-
-        if verdict is None:
-            if msg.category_source == "override":
-                counts["skip_override"] += 1
-            else:
-                counts["skip_default_unchanged"] += 1
-            continue
-
-        new_cat, new_src = verdict
-        counts[f"reclassified_{new_src}"] += 1
-        counts[f"target_{new_cat}"] += 1
-        if len(sample[new_src]) < 5:
-            sample[new_src].append({
-                "id": str(msg.id),
-                "from": msg.from_address,
-                "subject": msg.subject,
-                "old": (msg.category, msg.category_source),
-                "new": (new_cat, new_src),
-            })
-
-        pending_updates.append((msg.id, new_cat, new_src))
-
-        if processed % PROGRESS_EVERY == 0:
-            logger.info(
-                "User %s — processed %d, history=%d headers=%d, override=%d unchanged=%d",
-                user_id, processed,
-                counts["reclassified_history"],
-                counts["reclassified_headers"],
-                counts["skip_override"],
-                counts["skip_default_unchanged"],
+    while True:
+        page_q = (
+            select(Message)
+            .where(
+                Message.account_id.in_(select(user_accounts_subq.c.id)),
+                Message.is_sent.is_(False),
+                Message.is_archived.is_(False),
             )
+            .order_by(Message.id)
+            .limit(BATCH_SIZE)
+        )
+        if last_seen_id is not None:
+            page_q = page_q.where(Message.id > last_seen_id)
 
-        if not dry_run and len(pending_updates) >= BATCH_SIZE:
+        page = (await db.execute(page_q)).scalars().all()
+        if not page:
+            break
+
+        pending_updates: list[tuple[uuid.UUID, str, str]] = []
+        for msg in page:
+            processed += 1
+            verdict = verdict_for_message(msg, replied_to)
+
+            if verdict is None:
+                if msg.category_source == "override":
+                    counts["skip_override"] += 1
+                else:
+                    counts["skip_default_unchanged"] += 1
+                continue
+
+            new_cat, new_src = verdict
+            counts[f"reclassified_{new_src}"] += 1
+            counts[f"target_{new_cat}"] += 1
+            if len(sample[new_src]) < 5:
+                sample[new_src].append({
+                    "id": str(msg.id),
+                    "from": msg.from_address,
+                    "subject": msg.subject,
+                    "old": (msg.category, msg.category_source),
+                    "new": (new_cat, new_src),
+                })
+
+            pending_updates.append((msg.id, new_cat, new_src))
+
+            if processed % PROGRESS_EVERY == 0:
+                logger.info(
+                    "User %s — processed %d, history=%d headers=%d, override=%d unchanged=%d",
+                    user_id, processed,
+                    counts["reclassified_history"],
+                    counts["reclassified_headers"],
+                    counts["skip_override"],
+                    counts["skip_default_unchanged"],
+                )
+
+        # Flush this batch's writes (or commit nothing on dry-run).
+        if not dry_run and pending_updates:
             await _flush_batch(db, pending_updates)
-            pending_updates.clear()
+        elif dry_run:
+            # No writes, but advance any in-session state by rolling back
+            # so successive pages don't accumulate identity-map noise.
+            await db.rollback()
 
-    # Final flush.
-    if not dry_run and pending_updates:
-        await _flush_batch(db, pending_updates)
-        pending_updates.clear()
+        # Advance the cursor. Use the page's max id, not the last
+        # `pending_updates` id — a page can contain rows that produced no
+        # update, and we still need to skip past them next iteration.
+        last_seen_id = page[-1].id
+
+        # Short page → done.
+        if len(page) < BATCH_SIZE:
+            break
 
     elapsed = time.monotonic() - started
 

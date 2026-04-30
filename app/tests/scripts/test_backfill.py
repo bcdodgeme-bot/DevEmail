@@ -265,3 +265,68 @@ class TestBackfillRun:
         other_row = (await db.execute(select(Message).where(Message.id == m_other.id))).scalar_one()
         assert other_row.category == "people"
         assert other_row.category_source == "default"
+
+    async def test_completes_across_multiple_batches(self, db, account_a, user):
+        """
+        Regression: production run died after the first 500-row commit
+        because the streaming cursor was killed by commit. Keyset
+        pagination must span as many pages as needed without losing the
+        cursor state.
+
+        Fixture: 1500 messages — enough to cover three full batches.
+        Mix of ESP-domain (should flip to bulk/headers) and plain
+        (should stay default, no-op write) so we exercise both the
+        update path and the skip path across batch boundaries.
+        """
+        from app.models.message import Message
+        from app.models.thread import Thread
+        from sqlalchemy import select
+
+        TOTAL = 1500
+        # Bulk-build threads + messages directly to keep the fixture fast.
+        thread = Thread(id=uuid.uuid4(), user_id=user.id, message_count=TOTAL)
+        db.add(thread)
+        await db.flush()
+
+        for i in range(TOTAL):
+            db.add(Message(
+                id=uuid.uuid4(),
+                thread_id=thread.id,
+                account_id=account_a.id,
+                # Half ESP (will flip to bulk), half plain (no-op).
+                from_address=("news@amazonses.com" if i % 2 == 0
+                              else f"plain-{i}@unknown.example"),
+                to_addresses=[], cc_addresses=[], bcc_addresses=[],
+                subject=f"msg-{i}",
+                is_read=True, is_sent=False,
+                is_archived=False, is_trashed=False,
+                category="people", category_source="default",
+            ))
+        await db.commit()
+
+        await backfill_user(db, user.id, dry_run=False)
+
+        # Every ESP-domain message must now be bulk/headers.
+        bulk_count = (await db.execute(
+            select(Message).where(
+                Message.account_id == account_a.id,
+                Message.from_address == "news@amazonses.com",
+                Message.category == "bulk",
+                Message.category_source == "headers",
+            )
+        )).scalars().all()
+        assert len(bulk_count) == TOTAL // 2, (
+            f"Expected {TOTAL // 2} ESP messages to flip to bulk, "
+            f"got {len(bulk_count)} — likely a batch was lost mid-run."
+        )
+
+        # And the plain ones stay people/default (no-op write skipped).
+        plain_count = (await db.execute(
+            select(Message).where(
+                Message.account_id == account_a.id,
+                Message.from_address.like("plain-%@unknown.example"),
+                Message.category == "people",
+                Message.category_source == "default",
+            )
+        )).scalars().all()
+        assert len(plain_count) == TOTAL // 2
