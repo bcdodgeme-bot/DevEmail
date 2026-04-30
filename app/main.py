@@ -331,6 +331,9 @@ if os.path.exists(STATIC_DIR):
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
 
+    # Resolve once at startup so the traversal check below is unambiguous.
+    _STATIC_ROOT = os.path.realpath(STATIC_DIR)
+
     @app.get("/")
     async def serve_root():
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
@@ -340,9 +343,21 @@ if os.path.exists(STATIC_DIR):
         # Don't intercept unmatched API routes — return 404 instead of index.html
         if full_path.startswith("api"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        file_path = os.path.join(STATIC_DIR, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
+
+        # Block dotfile paths — never serve (or even acknowledge) /.git/*,
+        # /.env, /.ssh/*, /.htaccess, etc. Any path segment beginning with
+        # `.` is treated as private and returns 404.
+        if any(seg.startswith(".") for seg in full_path.split("/") if seg):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # Path-traversal guard: resolve the candidate path and confirm it's
+        # still inside STATIC_DIR before serving.
+        candidate = os.path.realpath(os.path.join(STATIC_DIR, full_path))
+        if (
+            (candidate == _STATIC_ROOT or candidate.startswith(_STATIC_ROOT + os.sep))
+            and os.path.isfile(candidate)
+        ):
+            return FileResponse(candidate)
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 else:

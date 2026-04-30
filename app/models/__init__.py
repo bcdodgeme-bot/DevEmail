@@ -11,10 +11,11 @@ from app.models.notification import NotificationPreference
 from app.models.unsubscribe import UnsubscribeLink
 from app.models.api_key import ApiKey
 from app.models.open_event import OpenEvent
+from app.models.sender_classification import SenderClassification
 
 __all__ = [
     "User", "RefreshToken", "Account", "Signature", "Folder",
     "Thread", "Message", "Attachment", "Contact",
     "Calendar", "Event", "NotificationPreference", "UnsubscribeLink",
-    "ApiKey", "OpenEvent",
+    "ApiKey", "OpenEvent", "SenderClassification",
 ]

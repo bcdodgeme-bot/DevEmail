@@ -45,6 +45,10 @@ class Message(Base):
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # People/Bulk classification — populated at sync time by the classifier
+    # gauntlet (override → reply history → header rules → default).
+    category: Mapped[str] = mapped_column(String(16), nullable=False, server_default="people", index=True)
+    category_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="default")
 
     # Relationships
     thread = relationship("Thread", back_populates="messages")
