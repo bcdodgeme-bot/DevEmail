@@ -21,6 +21,7 @@ from app.models.thread import Thread
 from app.models.message import Message
 from app.models.attachment import Attachment
 from app.models.unsubscribe import UnsubscribeLink
+from app.services.classification import ClassificationBatch
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,8 @@ class StalwartSyncService:
         self.db = db
         self.account = account
         self._imap = None
+        # One classifier batch per service instance (= per sync run).
+        self._classifier = ClassificationBatch(db, account.id, account.user_id)
 
     async def connect(self):
         """Establish IMAP connection to Stalwart."""
@@ -294,6 +297,23 @@ class StalwartSyncService:
         # Find or create thread
         thread = await self._resolve_thread(subject, message_id_header, in_reply_to, received_at)
 
+        # Classify People / Bulk before INSERT. Build a flat headers dict
+        # the classifier can do case-insensitive lookups on; the only
+        # headers it actually inspects are List-Unsubscribe, List-ID,
+        # Precedence, Auto-Submitted, Content-Type, Return-Path.
+        if is_sent:
+            category, category_source = "people", "default"
+        else:
+            classifier_headers = {
+                k: v for k, v in msg.items()
+            }
+            category, category_source = await self._classifier.classify(
+                from_address=from_address,
+                headers=classifier_headers,
+                content_type=msg.get("Content-Type"),
+                remote_id=remote_id,
+            )
+
         # Create message
         message = Message(
             thread_id=thread.id,
@@ -319,6 +339,8 @@ class StalwartSyncService:
             is_trashed=False,
             has_attachments=has_attachments,
             received_at=received_at,
+            category=category,
+            category_source=category_source,
         )
         self.db.add(message)
         await self.db.flush()

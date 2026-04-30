@@ -21,6 +21,7 @@ from app.models.thread import Thread
 from app.models.message import Message
 from app.models.attachment import Attachment
 from app.models.unsubscribe import UnsubscribeLink
+from app.services.classification import ClassificationBatch
 from app.services.google_oauth import refresh_google_token
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,9 @@ class GmailSyncService:
         self._email = account.email_address
         self.access_token = account.oauth_token
         self._http = None
+        # One classifier batch per service instance (= per sync run).
+        # Caches sender-stable results across all messages this run inserts.
+        self._classifier = ClassificationBatch(db, self._account_id, self._user_id)
 
     async def _get_http(self):
         """Lazy-init httpx client."""
@@ -461,6 +465,19 @@ class GmailSyncService:
         # Check for attachments
         has_attachments = _has_attachments(payload)
 
+        # Classify People / Bulk before INSERT so category lands on the row
+        # immediately. Sent mail bypasses classification — the schema default
+        # ('people', 'default') applies and sent items live in their own view.
+        if is_sent:
+            category, category_source = "people", "default"
+        else:
+            category, category_source = await self._classifier.classify(
+                from_address=from_address,
+                headers=headers,
+                content_type=headers.get("content-type"),
+                remote_id=gmail_id,
+            )
+
         # Create message
         message = Message(
             thread_id=thread_id,
@@ -488,6 +505,8 @@ class GmailSyncService:
             has_attachments=has_attachments,
             received_at=received_at,
             sent_at=received_at if is_sent else None,
+            category=category,
+            category_source=category_source,
         )
         self.db.add(message)
         await self.db.flush()

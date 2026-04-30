@@ -11,6 +11,7 @@ and never assumes ingest has normalized.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Literal, Optional
 
@@ -20,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.message import Message
 from app.models.sender_classification import SenderClassification
+
+logger = logging.getLogger(__name__)
 
 
 Category = Literal["people", "bulk"]
@@ -280,3 +283,74 @@ async def classify_message(
 
     # 4. Default
     return "people", "default"
+
+
+# ---------------------------------------------------------------------------
+# Sync-time wrapper: per-batch cache + safe fallback
+# ---------------------------------------------------------------------------
+
+class ClassificationBatch:
+    """
+    Per-sync-batch classifier wrapper.
+
+    1. Caches results by (from_address.lower(), tuple of relevant header
+       fingerprint bits) so that 50 newsletter blasts from the same sender
+       in one Gmail backfill cause one DB lookup, not 50.
+    2. Catches exceptions from `classify_message` and falls back to
+       ('people', 'default') so a single malformed message can't kill the
+       entire sync. Logs the failure with remote_id and from_address.
+
+    Caller creates one of these per sync run and calls `classify(...)`
+    once per message before `db.add(message)`.
+    """
+
+    def __init__(self, db: AsyncSession, account_id: uuid.UUID, user_id: uuid.UUID):
+        self._db = db
+        self._account_id = account_id
+        self._user_id = user_id
+        # Keyed by from_address only — overrides and reply history are
+        # sender-keyed and don't depend on the message-specific headers.
+        # Header rules can flip the result for the same sender across
+        # messages (e.g. one personal reply, one newsletter via the same
+        # mailbox), so cache only when result is sourced from override
+        # or history (sender-stable). Header/default results bypass the
+        # cache. See _cache_if_stable below.
+        self._cache: dict[str, tuple[Category, Source]] = {}
+
+    async def classify(
+        self,
+        *,
+        from_address: str,
+        headers: dict,
+        content_type: Optional[str],
+        remote_id: Optional[str] = None,
+    ) -> tuple[Category, Source]:
+        addr_lower = (from_address or "").strip().lower()
+
+        # Fast-path: cached sender-stable result.
+        cached = self._cache.get(addr_lower)
+        if cached is not None:
+            return cached
+
+        try:
+            result = await classify_message(
+                db=self._db,
+                account_id=self._account_id,
+                user_id=self._user_id,
+                from_address=from_address,
+                headers=headers or {},
+                content_type=content_type,
+            )
+        except Exception as e:
+            logger.exception(
+                "Classifier failed for remote_id=%s from=%s: %s — using default",
+                remote_id, from_address, e,
+            )
+            return "people", "default"
+
+        # Only cache results whose verdict doesn't depend on per-message
+        # headers — otherwise we'd misclassify a different message from
+        # the same sender. Override and history are sender-stable.
+        if result[1] in ("override", "history"):
+            self._cache[addr_lower] = result
+        return result

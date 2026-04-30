@@ -22,3 +22,4 @@ app/services/__pycache__/classification.cpython-311.pyc
 app/tests/__pycache__/conftest.cpython-311-pytest-8.3.4.pyc
 app/models/__pycache__/sender_classification.cpython-311.pyc
 app/tests/services/__pycache__/test_classification.cpython-311-pytest-8.3.4.pyc
+app/tests/services/__pycache__/test_classification_batch.cpython-311-pytest-8.3.4.pyc

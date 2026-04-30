@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.thread import Thread
 from app.models.message import Message
+from app.services.classification import ClassificationBatch
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +255,9 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     new_count = 0
     skipped_count = 0
 
+    # One classifier batch per sync run.
+    classifier = ClassificationBatch(db, account.id, user_id)
+
     for uid, raw_email in raw_messages:
         msg = email.message_from_bytes(raw_email)
 
@@ -293,6 +297,17 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
             date=date,
         )
 
+        # Classify People / Bulk before INSERT. This IMAP path doesn't
+        # surface an is_sent flag (everything fetched here is treated as
+        # received), so always run the classifier.
+        classifier_headers = {k: v for k, v in msg.items()}
+        category, category_source = await classifier.classify(
+            from_address=from_parsed["address"],
+            headers=classifier_headers,
+            content_type=msg.get("Content-Type"),
+            remote_id=remote_id,
+        )
+
         # Create message
         new_message = Message(
             thread_id=thread.id,
@@ -313,6 +328,8 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
             is_read=False,
             has_attachments=attachment_count > 0,
             received_at=date,
+            category=category,
+            category_source=category_source,
         )
         db.add(new_message)
 
