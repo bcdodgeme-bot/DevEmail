@@ -26,6 +26,13 @@ from app.schemas.message import (
     AttachmentResponse,
     EmailAddress,
 )
+from app.schemas.classification import (
+    CategoryCountsResponse,
+    CategoryCountSlot,
+    CategoryUpdateRequest,
+    CategoryUpdateResponse,
+)
+from app.models.sender_classification import SenderClassification
 
 router = APIRouter(prefix="/messages", tags=["messages"])
 
@@ -40,6 +47,10 @@ async def get_inbox(
     folder_id: Optional[str] = None,
     starred_only: bool = False,
     unread_only: bool = False,
+    category: Optional[str] = Query(
+        None, pattern="^(all|people|bulk)$",
+        description="Filter by classification: 'people', 'bulk', or 'all' / omitted for no filter.",
+    ),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -75,6 +86,15 @@ async def get_inbox(
         )
         query = query.where(unread_filter)
         count_query = count_query.where(unread_filter)
+
+    # Filter by People/Bulk category. 'all' / omitted = no filter.
+    # Composes with every other filter above.
+    if category in ("people", "bulk"):
+        category_filter = Thread.id.in_(
+            select(Message.thread_id).where(Message.category == category)
+        )
+        query = query.where(category_filter)
+        count_query = count_query.where(category_filter)
 
     # Exclude threads where ALL messages are trashed
     active_msg_filter = Thread.id.in_(
@@ -116,6 +136,59 @@ async def get_inbox(
         total=total,
         page=page,
         per_page=per_page,
+    )
+
+
+# --- People/Bulk category endpoints ---
+
+@router.get("/category-counts", response_model=CategoryCountsResponse)
+async def get_category_counts(
+    account_id: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Per-category unread / total counts for the current inbox view.
+
+    Same scoping as get_inbox: messages belonging to the user's accounts,
+    excluding archived and trashed (these are the same active-message
+    filters get_inbox applies).
+
+    Three COUNT queries (one per filter combo). At our scale this is fine;
+    if it ever shows up hot in profiling, collapse into a single GROUP BY
+    on (category, is_read).
+    """
+    # Base scope: messages on the user's accounts, not archived, not trashed.
+    user_accounts = select(Account.id).where(Account.user_id == user.id)
+
+    base_filter = and_(
+        Message.account_id.in_(user_accounts),
+        Message.is_archived == False,
+        Message.is_trashed == False,
+    )
+    if account_id:
+        base_filter = and_(base_filter, Message.account_id == account_id)
+
+    async def _count(extra=None) -> tuple[int, int]:
+        cond = base_filter
+        if extra is not None:
+            cond = and_(cond, extra)
+        total_q = select(func.count(Message.id)).where(cond)
+        unread_q = select(func.count(Message.id)).where(
+            and_(cond, Message.is_read == False)
+        )
+        total = (await db.execute(total_q)).scalar() or 0
+        unread = (await db.execute(unread_q)).scalar() or 0
+        return unread, total
+
+    all_unread, all_total = await _count()
+    people_unread, people_total = await _count(Message.category == "people")
+    bulk_unread, bulk_total = await _count(Message.category == "bulk")
+
+    return CategoryCountsResponse(
+        all=CategoryCountSlot(unread=all_unread, total=all_total),
+        people=CategoryCountSlot(unread=people_unread, total=people_total),
+        bulk=CategoryCountSlot(unread=bulk_unread, total=bulk_total),
     )
 
 
@@ -454,6 +527,119 @@ async def mark_message_read(
     msg.is_read = True
     await db.commit()
     return {"is_read": True}
+
+
+@router.post("/{message_id}/category", response_model=CategoryUpdateResponse)
+async def set_message_category(
+    message_id: str,
+    request: CategoryUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Manually move a message between People and Bulk.
+
+    Side effects, all in a single transaction:
+    1. Update the target message: category := request.category,
+       category_source := 'override'.
+    2. Upsert sender_classifications row scoped to the message's account
+       and from_address (lowercased). is_domain_rule = request.apply_to_domain.
+    3. If request.apply_to_existing: bulk-update other messages from the
+       same sender (or domain) in the same account to the new category.
+    """
+    # Auth: _get_message_or_404 already restricts to the user's accounts.
+    msg = await _get_message_or_404(db, user.id, message_id)
+
+    sender_lower = (msg.from_address or "").strip().lower()
+    if not sender_lower:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message has no from_address — cannot create classification rule.",
+        )
+    domain_lower = sender_lower.rsplit("@", 1)[-1] if "@" in sender_lower else None
+    if request.apply_to_domain and not domain_lower:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot apply to domain — sender address has no domain.",
+        )
+
+    # 1. Update the target message.
+    msg.category = request.category
+    msg.category_source = "override"
+
+    # 2. Upsert sender_classifications. Use the unique-constraint key
+    #    (account_id, sender_address, is_domain_rule). Address-level
+    #    rules always use the full sender_address; domain-level rules
+    #    store the same full address (so a user with multiple per-address
+    #    overrides can also have a coexisting per-domain rule per the
+    #    Phase 1 spec).
+    is_domain_rule = bool(request.apply_to_domain)
+    existing_rule_q = select(SenderClassification).where(
+        and_(
+            SenderClassification.account_id == msg.account_id,
+            func.lower(SenderClassification.sender_address) == sender_lower,
+            SenderClassification.is_domain_rule.is_(is_domain_rule),
+        )
+    )
+    existing_rule = (await db.execute(existing_rule_q)).scalar_one_or_none()
+    if existing_rule:
+        existing_rule.category = request.category
+        existing_rule.learned_from = "manual_move"
+        existing_rule.sender_domain = domain_lower if is_domain_rule else None
+    else:
+        db.add(SenderClassification(
+            account_id=msg.account_id,
+            sender_address=sender_lower,
+            sender_domain=domain_lower if is_domain_rule else None,
+            is_domain_rule=is_domain_rule,
+            category=request.category,
+            learned_from="manual_move",
+        ))
+
+    # 3. Optionally retroactively update existing messages from this
+    #    sender / domain. Don't clobber other senders' overrides — the
+    #    WHERE clause is scoped to from_address (or @domain) of THIS
+    #    sender, so overrides on different senders are untouched.
+    applied_count = 0
+    if request.apply_to_existing:
+        if is_domain_rule:
+            # Domain-level: any message in this account whose from_address
+            # ends in '@<domain>'. Skip the message we already updated.
+            domain_pattern = f"%@{domain_lower}"
+            stmt = (
+                sa_update(Message)
+                .where(
+                    Message.account_id == msg.account_id,
+                    Message.id != msg.id,
+                    func.lower(Message.from_address).like(domain_pattern),
+                )
+                .values(category=request.category, category_source="override")
+                .execution_options(synchronize_session=False)
+            )
+        else:
+            # Address-level: same exact sender, same account.
+            stmt = (
+                sa_update(Message)
+                .where(
+                    Message.account_id == msg.account_id,
+                    Message.id != msg.id,
+                    func.lower(Message.from_address) == sender_lower,
+                )
+                .values(category=request.category, category_source="override")
+                .execution_options(synchronize_session=False)
+            )
+        result = await db.execute(stmt)
+        applied_count = result.rowcount or 0
+
+    # Atomic: one commit for steps 1-3.
+    await db.commit()
+
+    return CategoryUpdateResponse(
+        id=str(msg.id),
+        category=msg.category,  # type: ignore[arg-type]
+        category_source=msg.category_source,
+        applied_to_existing_count=applied_count,
+    )
 
 
 # --- Inline Image Serving (cid: references in HTML email bodies) ---

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(DATABASE_URL=postgresql://x JWT_SECRET_KEY=x python -m pytest app/tests -q)",
+      "Bash(python -m pip install --quiet 'python-jose[cryptography]==3.3.0' 'passlib[bcrypt]==1.7.4' bcrypt authlib httpx aioimaplib aiosmtplib 'redis>=5' 'cryptography')",
+      "Bash(DATABASE_URL=postgresql://x JWT_SECRET_KEY=x python -m app.scripts.backfill_classifications --help)"
+    ]
+  }
+}

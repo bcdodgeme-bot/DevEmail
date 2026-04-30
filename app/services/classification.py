@@ -253,6 +253,26 @@ def _check_header_rules(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def classify_by_headers(
+    from_address: str,
+    headers: dict,
+    content_type: Optional[str] = None,
+) -> Optional[tuple[Category, Source]]:
+    """
+    Pure-Python header/ESP gauntlet step. Returns ('bulk', 'headers') if
+    any header rule fires, else None (caller decides the default).
+
+    Reused by the sync-time `classify_message` AND by the offline backfill
+    script — backfill skips the override and history DB queries (it
+    pre-computes those) but still needs the same header rule logic, so
+    extracting this avoids duplication and drift.
+    """
+    addr_lower = (from_address or "").strip().lower()
+    if _check_header_rules(headers or {}, content_type, addr_lower):
+        return "bulk", "headers"
+    return None
+
+
 async def classify_message(
     *,
     db: AsyncSession,
@@ -278,8 +298,9 @@ async def classify_message(
         return "people", "history"
 
     # 3. Header rules
-    if _check_header_rules(headers or {}, content_type, addr_lower):
-        return "bulk", "headers"
+    header_verdict = classify_by_headers(from_address, headers, content_type)
+    if header_verdict is not None:
+        return header_verdict
 
     # 4. Default
     return "people", "default"

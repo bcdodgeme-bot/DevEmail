@@ -18,7 +18,7 @@ from app.models.thread import Thread
 from app.services.imap_sync import sync_account
 from app.services.gmail_sync import GmailSyncService
 from app.routers import auth, contacts, health, accounts, messages, calendars, sync, preferences
-from app.routers import notifications, api_keys, syntax, tracking
+from app.routers import notifications, api_keys, syntax, tracking, classifications
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +317,7 @@ app.include_router(notifications.router, prefix="/api")
 app.include_router(api_keys.router, prefix="/api")
 app.include_router(syntax.router, prefix="/api")
 app.include_router(tracking.router, prefix="/api")
+app.include_router(classifications.router, prefix="/api")
 
 
 # --------------------------------------------------
