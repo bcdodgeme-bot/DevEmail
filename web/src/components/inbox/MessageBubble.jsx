@@ -131,7 +131,24 @@ export default function MessageBubble({ message }) {
                 ? `${displayName} <${message.from_address}>`
                 : displayName}
             </span>
-            {message.is_draft && <span className={styles.draftBadge}>Draft</span>}
+            {message.is_draft && (
+              <>
+                <span className={styles.draftBadge}>Draft</span>
+                <button
+                  type="button"
+                  className={styles.editDraftBtn}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.dispatchEvent(new CustomEvent('devemail:compose', {
+                      detail: { editDraft: message },
+                    }));
+                  }}
+                  title="Edit this draft"
+                >
+                  Edit
+                </button>
+              </>
+            )}
             {viaLabel && (
               <span className={styles.viaBadge} title={`Received by ${viaLabel}`}>
                 via {viaLabel}

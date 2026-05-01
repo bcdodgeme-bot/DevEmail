@@ -724,16 +724,20 @@ class GmailSyncService:
 # --- Helper Functions ---
 
 def _parse_email_address(raw: str) -> tuple[Optional[str], str]:
-    """Parse 'Name <email@example.com>' into (name, address)."""
+    """Parse 'Name <email@example.com>' into (name, address).
+
+    Address is lowercased + stripped at ingest (Phase 8). Display name
+    preserves casing for the human-facing label.
+    """
     if not raw:
         return None, ""
 
     if "<" in raw and ">" in raw:
         name = raw[:raw.index("<")].strip().strip('"')
-        address = raw[raw.index("<") + 1:raw.index(">")].strip()
+        address = raw[raw.index("<") + 1:raw.index(">")].strip().lower()
         return name or None, address
 
-    return None, raw.strip()
+    return None, raw.strip().lower()
 
 
 def _parse_address_list(raw: str) -> list[dict]:

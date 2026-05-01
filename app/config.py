@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     APP_URL: str = "https://devemail.damnitcarl.dev"
     CORS_ORIGINS: str = '["https://devemail.damnitcarl.dev","http://localhost:3000"]'
 
+    # Compose attachments (Phase 9)
+    # 25 MiB matches Gmail's personal-account on-disk cap. Encoded MIME size
+    # is ~33% larger; provider may still reject at the encoded boundary.
+    ATTACHMENT_MAX_BYTES: int = 25 * 1024 * 1024
+    # Persistent storage directory. The backend container needs write access
+    # to this path. In Docker, mount a volume here so drafts survive
+    # restarts.
+    ATTACHMENT_STORAGE_DIR: str = "/var/devemail/attachments"
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

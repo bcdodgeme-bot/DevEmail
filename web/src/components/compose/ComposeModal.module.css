@@ -320,3 +320,116 @@
   font-weight: 400;
   color: var(--text-muted, #64748b);
 }
+
+/* ── Phase 9 attachment list ─────────────────────────────────── */
+
+.attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+}
+
+.attachmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attachmentItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-tertiary, rgba(139, 92, 246, 0.06));
+  border: 1px solid var(--border, rgba(139, 92, 246, 0.12));
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.attachmentIcon {
+  flex-shrink: 0;
+  color: var(--text-muted, #64748b);
+}
+
+.attachmentName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary, #e2e8f0);
+  text-decoration: none;
+}
+
+a.attachmentName:hover {
+  text-decoration: underline;
+}
+
+.attachmentSize {
+  flex-shrink: 0;
+  color: var(--text-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachmentStatus {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+}
+
+.attachmentUploading .attachmentStatus {
+  color: var(--accent-purple, #a78bfa);
+}
+
+.attachmentError {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.attachmentError .attachmentStatus {
+  color: #fca5a5;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentRemove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.attachmentRemove:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+}
+
+.attachmentMeter {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachmentMeterWarn {
+  color: #fbbf24;
+}
+
+.attachmentMeterOver {
+  color: #fca5a5;
+  font-weight: 600;
+}
+
+.attachmentMeterMsg {
+  font-weight: 400;
+}

@@ -5,9 +5,47 @@ Pure function: runs the priority gauntlet (override → reply history →
 header rules → default) and returns (category, source). Does NOT write to
 messages or sender_classifications — caller is responsible for persistence.
 
-Address normalization at ingest is currently inconsistent (see
-docs/phase2_recon.md). This module lowercases on BOTH sides at query time
-and never assumes ingest has normalized.
+Gauntlet (stop at the first match):
+
+    1. Override — sender_classifications row scoped to the account, keyed
+       on sender_address (address-level wins) or sender_domain (domain-
+       level fallback). Source: 'override'.
+
+    2. Reply history — has the user (across ANY of their accounts) ever
+       sent a message whose to_addresses or cc_addresses contains this
+       sender's address? Skips bcc. Source: 'history'.
+
+    3. Header rules — any one of: List-Unsubscribe, List-ID, Precedence:
+       bulk|list, Auto-Submitted (anything but 'no'), Content-Type
+       text/calendar, multipart/report (DSN), mailer-daemon@ /
+       postmaster@ pattern, From-domain or Return-Path on KNOWN_ESP_DOMAINS
+       (subdomain match included). Source: 'headers' → category 'bulk'.
+
+    4. Default → ('people', 'default').
+
+Data invariants (Phase 8 onward):
+  - All addresses (Message.from_address, the .address field of every
+    JSONB list-of-objects column, sender_classifications.sender_address)
+    are stored lowercased + stripped at write time. Five ingest paths +
+    the EmailAddress Pydantic validator enforce this. Migration 010
+    backfilled legacy rows.
+  - Despite the above, this module still lowercases on BOTH sides at
+    query time. Ingest normalization is best-effort; defensive lookups
+    survive a future regression.
+
+Limitation:
+  - Classifier-relevant headers (List-Unsubscribe, List-ID, Precedence,
+    Auto-Submitted) are NOT persisted on messages. The classifier reads
+    them from the local headers dict at sync time, classifies, and
+    discards them. Bulk re-classification of historical mail therefore
+    can only apply the from-address-only subset of the header gauntlet.
+    See docs/people_bulk.md and the backfill script for details.
+
+Cross-account scope:
+  - Reply history is USER-scoped — a reply from work account counts as
+    a People signal for mail arriving on personal account.
+  - Overrides are ACCOUNT-scoped — work and personal can disagree about
+    the same sender. By design.
 """
 from __future__ import annotations
 

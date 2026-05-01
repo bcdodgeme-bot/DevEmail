@@ -495,7 +495,11 @@ def _parse_flags(line: str) -> set:
 
 
 def _parse_email_header_address(raw: str) -> tuple[Optional[str], str]:
-    """Parse 'Name <email>' from email header."""
+    """Parse 'Name <email>' from email header.
+
+    Address is lowercased + stripped at ingest (Phase 8). Display name
+    preserves casing.
+    """
     if not raw:
         return None, ""
 
@@ -503,10 +507,10 @@ def _parse_email_header_address(raw: str) -> tuple[Optional[str], str]:
 
     if "<" in decoded and ">" in decoded:
         name = decoded[:decoded.index("<")].strip().strip('"')
-        address = decoded[decoded.index("<") + 1:decoded.index(">")].strip()
+        address = decoded[decoded.index("<") + 1:decoded.index(">")].strip().lower()
         return name or None, address
 
-    return None, decoded.strip()
+    return None, decoded.strip().lower()
 
 
 def _parse_header_address_list(raw: str) -> list[dict]:

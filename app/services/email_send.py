@@ -64,6 +64,114 @@ class EmailSendService:
         self.db = db
         self.account = account
 
+    async def send_from_draft(
+        self,
+        draft_message: Message,
+        *,
+        to: list[dict],
+        subject: str,
+        body_html: Optional[str] = None,
+        body_text: Optional[str] = None,
+        cc: list[dict] = None,
+        bcc: list[dict] = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[str] = None,
+        signature_id: Optional[str] = None,
+        read_receipt: bool = False,
+        attachments: list[dict] = None,
+    ) -> dict:
+        """
+        Send an email FROM an already-persisted draft Message.
+
+        The draft (along with its on-disk attachments and DB Attachment rows)
+        was created up front by the compose endpoint. This method:
+          1. Builds the MIME message — same format as `send()`.
+          2. Hands off to the provider transport.
+          3. ON SUCCESS: updates the draft in place (is_draft=false,
+             is_sent=true, sent_at, remote_id, body_html w/ tracking pixel).
+             Attachment rows already point at this Message id, so they
+             travel with it into the Sent folder automatically.
+          4. ON FAILURE: raises. Caller leaves the draft untouched —
+             user retries from the Drafts folder. (Phase 9 design choice
+             iii: don't lose the user's work on a transient SMTP error.)
+
+        Note: existing send() (used by tests/scripts) is preserved
+        unchanged. This is a new path specifically for the
+        attachment-aware compose flow.
+        """
+        cc = cc or []
+        bcc = bcc or []
+        attachments = attachments or []
+
+        if signature_id:
+            body_html, body_text = await self._append_signature(
+                signature_id, body_html, body_text
+            )
+
+        tracking_token = uuid.uuid4() if body_html else None
+        if tracking_token:
+            body_html = _inject_tracking_pixel(body_html, tracking_token)
+
+        mime_msg = self._build_mime(
+            to=to,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            cc=cc,
+            bcc=bcc,
+            in_reply_to=in_reply_to,
+            references=references,
+            read_receipt=read_receipt,
+            attachments=attachments,
+        )
+
+        # Provider call. Raises on failure → caller's exception handler
+        # leaves the draft intact.
+        if self.account.provider == "gmail":
+            remote_id = await self._send_gmail(mime_msg)
+        elif self.account.provider == "stalwart":
+            remote_id = await self._send_smtp(mime_msg)
+        else:
+            raise Exception(f"Unknown provider: {self.account.provider}")
+
+        # Flip the draft → sent in place.
+        now = datetime.now(timezone.utc)
+        draft_message.is_draft = False
+        draft_message.is_sent = True
+        draft_message.sent_at = now
+        draft_message.received_at = now
+        draft_message.remote_id = remote_id
+        if tracking_token is not None:
+            draft_message.tracking_token = tracking_token
+        # Persist the body w/ tracking pixel so the Sent-folder view shows
+        # what was actually sent.
+        if body_html is not None:
+            draft_message.body_html = body_html
+        if body_text is not None:
+            draft_message.body_text = body_text
+        draft_message.has_attachments = len(attachments) > 0
+        await self.db.flush()
+
+        # Bump thread metadata to reflect the new send.
+        await self.db.execute(
+            sa_update(Thread)
+            .where(Thread.id == draft_message.thread_id)
+            .values(last_message_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        await self.db.commit()
+
+        logger.info(
+            "Sent email (from draft) via %s from %s to %s",
+            self.account.provider, self.account.email_address, to,
+        )
+
+        return {
+            "message_id": str(draft_message.id),
+            "thread_id": str(draft_message.thread_id),
+            "remote_id": remote_id,
+        }
+
     async def send(
         self,
         to: list[dict],
@@ -370,7 +478,7 @@ class EmailSendService:
             thread_id=thread.id,
             account_id=self.account.id,
             remote_id=remote_id,
-            from_address=self.account.email_address,
+            from_address=(self.account.email_address or "").strip().lower(),
             from_name=self.account.display_name,
             to_addresses=to,
             cc_addresses=cc,

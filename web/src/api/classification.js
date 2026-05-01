@@ -8,16 +8,10 @@ export function fetchCategoryCounts({ accountId } = {}) {
   return apiFetch(`/messages/category-counts${qs ? `?${qs}` : ''}`);
 }
 
-/**
- * Manually move a message between People and Bulk.
- *
- * Note: backend currently exposes this as POST. There's a deferred Phase 8
- * task to switch to PATCH for convention consistency. Update this single
- * call site when that lands.
- */
+/** Manually move a message between People and Bulk. */
 export function setMessageCategory(messageId, { category, applyToDomain = false, applyToExisting = false }) {
   return apiFetch(`/messages/${messageId}/category`, {
-    method: 'POST',
+    method: 'PATCH',
     body: JSON.stringify({
       category,
       apply_to_domain: applyToDomain,

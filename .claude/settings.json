@@ -10,7 +10,10 @@
       "Bash(npx vitest *)",
       "Bash(npm config *)",
       "Read(//Users/b.c.dodge/.npm/**)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python -m pip install --quiet aiofiles==24.1.0)",
+      "Bash(DATABASE_URL=postgresql://x JWT_SECRET_KEY=x python -m pytest app/tests/services/test_attachment_storage.py -q)",
+      "Bash(DATABASE_URL=postgresql://x JWT_SECRET_KEY=x python -m pytest /Users/b.c.dodge/Documents/Ghostline_Area/Ghostline-live/DevEmail/app/tests -q)"
     ],
     "additionalDirectories": [
       "/tmp"

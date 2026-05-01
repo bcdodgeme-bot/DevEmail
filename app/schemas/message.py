@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Optional, List
 
@@ -8,6 +8,15 @@ from typing import Optional, List
 class EmailAddress(BaseModel):
     address: str
     name: Optional[str] = None
+
+    @field_validator("address", mode="before")
+    @classmethod
+    def _normalize_address(cls, v):
+        # Trim whitespace and lowercase the address part. Display `name`
+        # intentionally preserves casing — that's the human-facing label.
+        if not isinstance(v, str):
+            return v
+        return v.strip().lower()
 
 
 # --- Attachments ---
@@ -114,6 +123,13 @@ class ComposeRequest(BaseModel):
     signature_id: Optional[str] = None
     read_receipt_requested: bool = False
     is_draft: bool = False
+    # Phase 9 E: when set, /compose treats this as "send-from-existing-
+    # draft" — it does NOT create a new Message row, and reuses the
+    # draft's already-attached files. Multipart file parts are forbidden
+    # in this mode (use POST /messages/{id}/attachments to add files
+    # to the draft first). Caller is the compose modal's "send a
+    # restored draft" path.
+    existing_message_id: Optional[str] = None
 
 
 class DraftUpdateRequest(BaseModel):

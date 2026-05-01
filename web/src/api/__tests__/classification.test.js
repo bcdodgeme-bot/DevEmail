@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 let setMessageCategory;
 
-describe('classification API: setMessageCategory', () => {
+describe('classification API: setMessageCategory (PATCH)', () => {
   let fetchSpy;
 
   beforeEach(async () => {
@@ -21,7 +21,7 @@ describe('classification API: setMessageCategory', () => {
     vi.restoreAllMocks();
   });
 
-  it('POSTs to /api/messages/{id}/category with the right body shape', async () => {
+  it('PATCHes /api/messages/{id}/category with the right body shape', async () => {
     await setMessageCategory('msg-1', {
       category: 'bulk',
       applyToDomain: true,
@@ -31,7 +31,7 @@ describe('classification API: setMessageCategory', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchSpy.mock.calls[0];
     expect(url).toBe('/api/messages/msg-1/category');
-    expect(opts.method).toBe('POST');
+    expect(opts.method).toBe('PATCH');
     expect(JSON.parse(opts.body)).toEqual({
       category: 'bulk',
       apply_to_domain: true,

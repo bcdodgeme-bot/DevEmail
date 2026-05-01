@@ -1,10 +1,15 @@
+import json
 import re
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
+from pydantic import ValidationError
 from sqlalchemy import select, func, or_, and_, desc, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from typing import Optional
+
+from app.config import settings
+from app.services import attachment_storage
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -529,7 +534,7 @@ async def mark_message_read(
     return {"is_read": True}
 
 
-@router.post("/{message_id}/category", response_model=CategoryUpdateResponse)
+@router.patch("/{message_id}/category", response_model=CategoryUpdateResponse)
 async def set_message_category(
     message_id: str,
     request: CategoryUpdateRequest,
@@ -680,10 +685,11 @@ async def get_inline_image(
         finally:
             await gmail._close()
     elif attachment.storage_path:
-        import aiofiles
         try:
-            async with aiofiles.open(attachment.storage_path, "rb") as f:
-                content = await f.read()
+            # storage_path is relative to ATTACHMENT_STORAGE_DIR; the
+            # storage layer reconstructs the absolute path and re-checks
+            # it stays inside the configured root.
+            content = await attachment_storage.read_bytes(attachment.storage_path)
         except FileNotFoundError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inline image file missing")
     else:
@@ -694,6 +700,204 @@ async def get_inline_image(
         media_type=attachment.content_type or "application/octet-stream",
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+# --- Attachments on a draft (Phase 9 D) ---
+
+@router.get(
+    "/{message_id}/attachments",
+    response_model=list[AttachmentResponse],
+)
+async def list_message_attachments(
+    message_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List attachments on a message — metadata only, no bytes. Used by the
+    compose modal when reopening a draft to show which files are already
+    attached, and by the read view of any message that has attachments.
+    Empty list when the message has none.
+
+    Auth: scoped to the user's accounts via _get_message_or_404.
+    """
+    msg = await _get_message_or_404(db, user.id, message_id)
+    rows = (await db.execute(
+        select(Attachment)
+        .where(Attachment.message_id == msg.id, Attachment.is_inline.is_(False))
+        .order_by(Attachment.created_at)
+    )).scalars().all()
+    return [
+        AttachmentResponse(
+            id=str(a.id),
+            filename=a.filename,
+            content_type=a.content_type,
+            size_bytes=a.size_bytes,
+        )
+        for a in rows
+    ]
+
+
+@router.post(
+    "/{message_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+    response_model=list[AttachmentResponse],
+)
+async def add_attachments_to_draft(
+    message_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload one or more attachments to an EXISTING draft. Same multipart
+    shape as compose: any number of `attachments` file parts.
+
+    Refuses non-draft messages (400) — sent mail's attachment list is
+    immutable. Size cap counts the EXISTING attachments on this draft
+    against the limit, so a draft can never exceed
+    settings.ATTACHMENT_MAX_BYTES regardless of how many uploads it took
+    to fill it.
+    """
+    msg = await _get_message_or_404(db, user.id, message_id)
+    if not msg.is_draft:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify attachments on a sent message.",
+        )
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected multipart/form-data with one or more 'attachments' file parts.",
+        )
+
+    form = await request.form()
+    upload_files = [f for f in form.getlist("attachments") if hasattr(f, "read") and hasattr(f, "filename")]
+    if not upload_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No 'attachments' file parts were sent.",
+        )
+
+    # Existing total counts toward the cap so a draft can't exceed it
+    # across multiple upload calls.
+    existing_total = (await db.execute(
+        select(func.coalesce(func.sum(Attachment.size_bytes), 0))
+        .where(Attachment.message_id == msg.id)
+    )).scalar() or 0
+
+    new_total = existing_total
+    saved_storage_paths: list[str] = []
+    new_rows: list[Attachment] = []
+
+    try:
+        for upload in upload_files:
+            data = await upload.read()
+            new_total += len(data)
+            if new_total > settings.ATTACHMENT_MAX_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"Adding this attachment would exceed the {settings.ATTACHMENT_MAX_BYTES}-byte cap "
+                        f"(existing draft total: {existing_total}, after add: {new_total})."
+                    ),
+                )
+
+            record = await attachment_storage.save_bytes(
+                data,
+                content_type=(upload.content_type or "application/octet-stream"),
+                filename=upload.filename,
+            )
+            saved_storage_paths.append(record.storage_path)
+
+            row = Attachment(
+                message_id=msg.id,
+                filename=record.filename,
+                content_type=record.content_type,
+                size_bytes=record.size_bytes,
+                storage_path=record.storage_path,
+                is_inline=False,
+            )
+            db.add(row)
+            new_rows.append(row)
+
+        # Mark the draft as having attachments now that we've added some.
+        msg.has_attachments = True
+        await db.commit()
+        for row in new_rows:
+            await db.refresh(row)
+    except HTTPException:
+        await db.rollback()
+        for sp in saved_storage_paths:
+            await attachment_storage.delete(sp)
+        raise
+    except Exception:
+        await db.rollback()
+        for sp in saved_storage_paths:
+            await attachment_storage.delete(sp)
+        raise
+
+    return [
+        AttachmentResponse(
+            id=str(r.id),
+            filename=r.filename,
+            content_type=r.content_type,
+            size_bytes=r.size_bytes,
+        )
+        for r in new_rows
+    ]
+
+
+@router.delete(
+    "/{message_id}/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_attachment(
+    message_id: str,
+    attachment_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Remove an attachment from its message. Removes the DB row AND the
+    on-disk file (best-effort — a missing file does not fail the call).
+
+    Returns 204 with no body. Cross-user attempts and unknown ids
+    return 404 (no existence leak).
+
+    Cleanup ordering: commit the DB delete FIRST, then unlink the file.
+    Orphan files are recoverable; lost data is not.
+    """
+    msg = await _get_message_or_404(db, user.id, message_id)
+
+    att = (await db.execute(
+        select(Attachment).where(
+            Attachment.id == attachment_id,
+            Attachment.message_id == msg.id,
+        )
+    )).scalar_one_or_none()
+    if not att:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+    storage_path_to_unlink = att.storage_path
+
+    await db.delete(att)
+    # If this was the last attachment, flip has_attachments off.
+    remaining = (await db.execute(
+        select(func.count(Attachment.id))
+        .where(Attachment.message_id == msg.id, Attachment.is_inline.is_(False))
+    )).scalar() or 0
+    if remaining == 0:
+        msg.has_attachments = False
+    await db.commit()
+
+    # File unlink runs AFTER commit. If this fails, the file becomes an
+    # orphan; the storage layer's delete logs and swallows. Caller's
+    # transaction is already safe.
+    if storage_path_to_unlink:
+        await attachment_storage.delete(storage_path_to_unlink)
 
 
 # --- Attachment Download ---
@@ -737,10 +941,10 @@ async def download_attachment(
         finally:
             await gmail._close()
     elif attachment.storage_path:
-        import aiofiles
         try:
-            async with aiofiles.open(attachment.storage_path, "rb") as f:
-                content = await f.read()
+            # storage_path is relative to ATTACHMENT_STORAGE_DIR; the
+            # storage layer rebuilds the absolute path safely.
+            content = await attachment_storage.read_bytes(attachment.storage_path)
         except FileNotFoundError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -898,110 +1102,268 @@ async def search_messages(
 
 # --- Compose ---
 
+@router.get("/config/attachments")
+async def get_attachment_config(
+    user: User = Depends(get_current_user),
+):
+    """
+    Server-authoritative attachment limits. Frontend fetches this on
+    compose-modal mount and uses it to gate uploads. Backend enforces
+    the same value during compose — the frontend cap is only UX.
+    """
+    return {"max_bytes": settings.ATTACHMENT_MAX_BYTES}
+
+
+async def _parse_compose_payload(request: Request) -> tuple[ComposeRequest, list]:
+    """
+    Decode the compose request from either JSON or multipart/form-data.
+
+    Returns (validated ComposeRequest, list of UploadFile).
+
+    JSON path (backward-compatible): body is the existing ComposeRequest
+    JSON, no attachments. The frontend's existing call-site keeps working
+    unchanged.
+
+    Multipart path: a single `payload` form field carries the same JSON
+    that the JSON path takes, plus zero or more `attachments` file parts.
+    Same field shape on both sides — the frontend just builds FormData
+    instead of a JSON body.
+    """
+    content_type = (request.headers.get("content-type") or "").lower()
+
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        payload_raw = form.get("payload")
+        if not payload_raw:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="multipart compose requires a 'payload' JSON field",
+            )
+        try:
+            payload_data = json.loads(payload_raw)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid 'payload' JSON: {e}",
+            )
+        try:
+            compose_request = ComposeRequest.model_validate(payload_data)
+        except ValidationError as e:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
+
+        files = form.getlist("attachments")
+        # Filter out any non-file form values that happened to land under the same key.
+        files = [f for f in files if hasattr(f, "read") and hasattr(f, "filename")]
+        return compose_request, files
+
+    # JSON path — original behavior.
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid JSON body: {e}",
+        )
+    try:
+        compose_request = ComposeRequest.model_validate(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
+    return compose_request, []
+
+
+async def _save_uploaded_attachments(
+    db: AsyncSession,
+    message_id,
+    upload_files: list,
+) -> int:
+    """
+    Save uploaded files to disk + insert Attachment rows pointing at
+    `message_id`. Enforces ATTACHMENT_MAX_BYTES across the total of all
+    files (server is the source of truth — frontend cap is only UX).
+    Returns the total bytes saved.
+
+    Caller is responsible for the surrounding transaction; this function
+    flushes but does not commit.
+    """
+    if not upload_files:
+        return 0
+
+    total = 0
+    saved_storage_paths: list[str] = []
+
+    try:
+        for upload in upload_files:
+            data = await upload.read()
+            total += len(data)
+            if total > settings.ATTACHMENT_MAX_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"Attachments total {total} bytes exceeds "
+                        f"max {settings.ATTACHMENT_MAX_BYTES} bytes."
+                    ),
+                )
+
+            record = await attachment_storage.save_bytes(
+                data,
+                content_type=(upload.content_type or "application/octet-stream"),
+                filename=upload.filename,
+            )
+            saved_storage_paths.append(record.storage_path)
+
+            db.add(Attachment(
+                message_id=message_id,
+                filename=record.filename,
+                content_type=record.content_type,
+                size_bytes=record.size_bytes,
+                storage_path=record.storage_path,
+                is_inline=False,
+            ))
+        await db.flush()
+        return total
+    except HTTPException:
+        # Roll back files we already wrote — the transaction will be
+        # rolled back by the caller, but on-disk files won't be.
+        for sp in saved_storage_paths:
+            await attachment_storage.delete(sp)
+        raise
+    except Exception:
+        for sp in saved_storage_paths:
+            await attachment_storage.delete(sp)
+        raise
+
+
 @router.post("/compose", status_code=status.HTTP_201_CREATED)
 async def compose_message(
-    request: ComposeRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Compose a new message — saves as draft or sends via SMTP/Gmail."""
+    """
+    Compose a new message — saves as draft or sends via SMTP/Gmail.
+
+    Accepts both `application/json` (existing shape, no attachments) and
+    `multipart/form-data` (a `payload` JSON field + zero or more
+    `attachments` file parts). One endpoint, two content types — the
+    frontend picks based on whether the user attached any files.
+
+    Send-failure behavior (Phase 9 design choice iii): on SMTP/Gmail
+    failure, the message stays as a draft with its attachments intact.
+    The user can retry from the Drafts folder. Losing a composed
+    email + attachments to a transient transport error is the worst
+    UX, and is_draft=true is a state we already understand.
+    """
     from app.services.email_send import EmailSendService
+
+    compose_request, upload_files = await _parse_compose_payload(request)
 
     # Verify account belongs to user
     result = await db.execute(
-        select(Account).where(Account.id == request.account_id, Account.user_id == user.id)
+        select(Account).where(Account.id == compose_request.account_id, Account.user_id == user.id)
     )
     account = result.scalar_one_or_none()
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    if request.is_draft:
-        # Just save as draft (existing logic)
-        thread = None
-        if request.in_reply_to_message_id:
-            orig_result = await db.execute(
-                select(Message).where(Message.id == request.in_reply_to_message_id)
+    # ── Send-from-existing-draft branch (Phase 9 E) ─────────────────────
+    # When the caller passes `existing_message_id`, we don't create a new
+    # Message — we send THE draft they already built (with whatever
+    # attachments are already on it). This is the path the compose modal
+    # uses when restoring a draft and clicking Send: any new files were
+    # uploaded via POST /messages/{id}/attachments first, and the body
+    # was kept fresh via PATCH /messages/{id}/draft (or a final body
+    # update would land here in `compose_request.body_*`).
+    if compose_request.existing_message_id:
+        if upload_files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "When existing_message_id is set, send file uploads via "
+                    "POST /messages/{id}/attachments first. /compose with "
+                    "existing_message_id does not accept file parts."
+                ),
             )
-            orig_msg = orig_result.scalar_one_or_none()
-            if orig_msg:
-                thread_result = await db.execute(
-                    select(Thread).where(Thread.id == orig_msg.thread_id)
-                )
-                thread = thread_result.scalar_one_or_none()
-
-        if not thread:
-            thread = Thread(
-                user_id=user.id,
-                subject=request.subject,
-                message_count=0,
+        if compose_request.is_draft:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="existing_message_id is only valid for sends (is_draft=false).",
             )
-            db.add(thread)
-            await db.flush()
+        existing = await _get_message_or_404(db, user.id, compose_request.existing_message_id)
+        if not existing.is_draft:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="existing_message_id must point to a draft.",
+            )
 
-        message = Message(
-            thread_id=thread.id,
-            account_id=account.id,
-            from_address=account.email_address,
-            from_name=account.display_name,
-            to_addresses=[a.model_dump() for a in request.to_addresses],
-            cc_addresses=[a.model_dump() for a in request.cc_addresses],
-            bcc_addresses=[a.model_dump() for a in request.bcc_addresses],
-            subject=request.subject,
-            body_html=request.body_html,
-            body_text=request.body_text,
-            is_draft=True,
-            is_read=True,
-        )
-        db.add(message)
+        # Update the draft with the latest body / recipients (the modal
+        # may have edited them since the last auto-save).
+        existing.to_addresses = [a.model_dump() for a in compose_request.to_addresses]
+        existing.cc_addresses = [a.model_dump() for a in compose_request.cc_addresses]
+        existing.bcc_addresses = [a.model_dump() for a in compose_request.bcc_addresses]
+        existing.subject = compose_request.subject
+        existing.body_html = compose_request.body_html
+        existing.body_text = compose_request.body_text
         await db.flush()
-        await db.execute(
-            sa_update(Thread)
-            .where(Thread.id == thread.id)
-            .values(message_count=Thread.message_count + 1)
-        )
-        await db.commit()
-        await db.refresh(message)
 
-        return {
-            "message_id": str(message.id),
-            "thread_id": str(thread.id),
-            "status": "draft",
-        }
-    else:
-        # Actually send the email
-        sender = EmailSendService(db, account)
-
-        # Look up in_reply_to header if replying
+        # Look up the in-reply-to header / references for threading, if any.
         in_reply_to_header = None
         references_header = None
-        if request.in_reply_to_message_id:
+        if compose_request.in_reply_to_message_id:
             orig_result = await db.execute(
-                select(Message).where(Message.id == request.in_reply_to_message_id)
+                select(Message).where(Message.id == compose_request.in_reply_to_message_id)
             )
             orig_msg = orig_result.scalar_one_or_none()
             if orig_msg:
                 in_reply_to_header = orig_msg.message_id_header
                 references_header = orig_msg.references
 
+        # Read the draft's already-persisted attachments off disk for the
+        # MIME build.
+        sender = EmailSendService(db, account)
+        attachment_payload = []
+        for att in (await db.execute(
+            select(Attachment).where(
+                Attachment.message_id == existing.id,
+                Attachment.is_inline.is_(False),
+            )
+        )).scalars().all():
+            if not att.storage_path:
+                continue
+            data = await attachment_storage.read_bytes(att.storage_path)
+            attachment_payload.append({
+                "filename": att.filename or "attachment",
+                "content_type": att.content_type or "application/octet-stream",
+                "data": data,
+            })
+
         try:
-            result = await sender.send(
-                to=[a.model_dump() for a in request.to_addresses],
-                subject=request.subject,
-                body_html=request.body_html,
-                body_text=request.body_text,
-                cc=[a.model_dump() for a in request.cc_addresses],
-                bcc=[a.model_dump() for a in request.bcc_addresses],
+            result = await sender.send_from_draft(
+                existing,
+                to=[a.model_dump() for a in compose_request.to_addresses],
+                subject=compose_request.subject,
+                body_html=compose_request.body_html,
+                body_text=compose_request.body_text,
+                cc=[a.model_dump() for a in compose_request.cc_addresses],
+                bcc=[a.model_dump() for a in compose_request.bcc_addresses],
                 in_reply_to=in_reply_to_header,
                 references=references_header,
-                signature_id=request.signature_id,
-                read_receipt=request.read_receipt_requested,
+                signature_id=compose_request.signature_id,
+                read_receipt=compose_request.read_receipt_requested,
+                attachments=attachment_payload,
             )
         except Exception as e:
             import logging
-            logging.getLogger(__name__).error("Failed to send message: %s", e)
+            logging.getLogger(__name__).error(
+                "Failed to send existing draft %s (kept as draft): %s",
+                existing.id, e,
+            )
+            await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to send message. Please check your account settings and try again.",
+                detail=(
+                    "Failed to send message. The draft has been saved — "
+                    "open it from the Drafts folder to retry."
+                ),
             )
 
         return {
@@ -1009,6 +1371,134 @@ async def compose_message(
             "thread_id": result["thread_id"],
             "status": "sent",
         }
+
+    # Resolve thread (reuse the original-message's thread for replies).
+    thread = None
+    in_reply_to_header = None
+    references_header = None
+    if compose_request.in_reply_to_message_id:
+        orig_result = await db.execute(
+            select(Message).where(Message.id == compose_request.in_reply_to_message_id)
+        )
+        orig_msg = orig_result.scalar_one_or_none()
+        if orig_msg:
+            in_reply_to_header = orig_msg.message_id_header
+            references_header = orig_msg.references
+            thread_result = await db.execute(
+                select(Thread).where(Thread.id == orig_msg.thread_id)
+            )
+            thread = thread_result.scalar_one_or_none()
+
+    if not thread:
+        thread = Thread(
+            user_id=user.id,
+            subject=compose_request.subject,
+            message_count=0,
+        )
+        db.add(thread)
+        await db.flush()
+
+    # Step 1: always create the Message as a draft first. Attachments
+    # need a Message to point at (FK), and creating it as a draft means
+    # a send-failure path is already in the right state.
+    message = Message(
+        thread_id=thread.id,
+        account_id=account.id,
+        from_address=(account.email_address or "").strip().lower(),
+        from_name=account.display_name,
+        to_addresses=[a.model_dump() for a in compose_request.to_addresses],
+        cc_addresses=[a.model_dump() for a in compose_request.cc_addresses],
+        bcc_addresses=[a.model_dump() for a in compose_request.bcc_addresses],
+        subject=compose_request.subject,
+        body_html=compose_request.body_html,
+        body_text=compose_request.body_text,
+        is_draft=True,
+        is_read=True,
+        has_attachments=len(upload_files) > 0,
+    )
+    db.add(message)
+    await db.flush()
+
+    # Step 2: persist attachment files + DB rows. _save_uploaded_attachments
+    # raises 413 on size cap with on-disk cleanup of partial writes.
+    try:
+        await _save_uploaded_attachments(db, message.id, upload_files)
+    except HTTPException:
+        # Roll back the in-flight Message + Thread so the cap rejection
+        # leaves the DB in the same state as if the user hadn't called.
+        await db.rollback()
+        raise
+
+    await db.execute(
+        sa_update(Thread)
+        .where(Thread.id == thread.id)
+        .values(message_count=Thread.message_count + 1)
+    )
+    await db.commit()
+    await db.refresh(message)
+
+    # Step 3a: draft intent — done.
+    if compose_request.is_draft:
+        return {
+            "message_id": str(message.id),
+            "thread_id": str(thread.id),
+            "status": "draft",
+        }
+
+    # Step 3b: send intent — load attachment bytes from disk, hand off to
+    # the transport, flip the draft → sent in place. On failure, the
+    # draft survives untouched.
+    sender = EmailSendService(db, account)
+    attachment_payload = []
+    for att in (await db.execute(
+        select(Attachment).where(Attachment.message_id == message.id)
+    )).scalars().all():
+        if not att.storage_path:
+            continue
+        data = await attachment_storage.read_bytes(att.storage_path)
+        attachment_payload.append({
+            "filename": att.filename or "attachment",
+            "content_type": att.content_type or "application/octet-stream",
+            "data": data,
+        })
+
+    try:
+        result = await sender.send_from_draft(
+            message,
+            to=[a.model_dump() for a in compose_request.to_addresses],
+            subject=compose_request.subject,
+            body_html=compose_request.body_html,
+            body_text=compose_request.body_text,
+            cc=[a.model_dump() for a in compose_request.cc_addresses],
+            bcc=[a.model_dump() for a in compose_request.bcc_addresses],
+            in_reply_to=in_reply_to_header,
+            references=references_header,
+            signature_id=compose_request.signature_id,
+            read_receipt=compose_request.read_receipt_requested,
+            attachments=attachment_payload,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            "Failed to send message %s (kept as draft): %s", message.id, e,
+        )
+        # Roll back any in-progress changes from send_from_draft. The
+        # message is already committed as a draft, so this leaves the
+        # user's work intact.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "Failed to send message. The draft has been saved — "
+                "open it from the Drafts folder to retry."
+            ),
+        )
+
+    return {
+        "message_id": result["message_id"],
+        "thread_id": result["thread_id"],
+        "status": "sent",
+    }
 
 # --- Helpers ---
 

@@ -61,3 +61,7 @@ app/routers/__pycache__/classifications.cpython-311.pyc
 app/scripts/__pycache__/backfill_classifications.cpython-311.pyc
 app/tests/scripts/__pycache__/test_backfill.cpython-311-pytest-8.3.4.pyc
 app/tests/routers/__pycache__/test_messages_classification.cpython-311-pytest-8.3.4.pyc
+app/services/__pycache__/attachment_storage.cpython-311.pyc
+app/tests/routers/__pycache__/test_draft_attachments.cpython-311-pytest-8.3.4.pyc
+app/tests/services/__pycache__/test_attachment_storage.cpython-311-pytest-8.3.4.pyc
+app/tests/routers/__pycache__/test_compose_attachments.cpython-311-pytest-8.3.4.pyc

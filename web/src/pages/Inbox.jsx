@@ -197,16 +197,20 @@ export default function Inbox() {
     if (!messageId) {
       throw new Error('This thread has no underlying message id — cannot move.');
     }
-    await dispatch(setMessageCategory({
+    const result = await dispatch(setMessageCategory({
       messageId,
       category: targetCategory,
       applyToDomain,
       applyToExisting,
     })).unwrap();
-    dispatch(showToast({
-      message: targetCategory === 'bulk' ? 'Moved to Bulk' : 'Moved to People',
-      duration: 2500,
-    }));
+    // Sweep feedback: include count when more than the target message moved.
+    const sweptCount = result?.applied_to_existing_count || 0;
+    const targetLabel = targetCategory === 'bulk' ? 'Bulk' : 'People';
+    const totalMoved = sweptCount + 1;
+    const message = totalMoved > 1
+      ? `Moved ${totalMoved} messages to ${targetLabel}`
+      : `Moved to ${targetLabel}`;
+    dispatch(showToast({ message, duration: 2500 }));
     setMoveTarget(null);
   };
 

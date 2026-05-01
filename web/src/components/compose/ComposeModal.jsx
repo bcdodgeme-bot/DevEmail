@@ -10,8 +10,9 @@ import {
 } from 'lucide-react';
 import { selectAccounts, selectDefaultAccount, fetchAccounts } from '../../store/accountsSlice';
 import { archiveThread } from '../../store/inboxSlice';
-import { composeAPI } from '../../api/compose';
+import { composeAPI, attachmentsAPI } from '../../api/compose';
 import { apiFetch } from '../../utils/api';
+import { formatBytes } from '../../utils/formatBytes';
 import AccountPicker from './AccountPicker';
 import RecipientInput from './RecipientInput';
 import styles from './ComposeModal.module.css';
@@ -59,6 +60,11 @@ export default function ComposeModal({
   replyAll = false,
   forward = null,
   prefillTo = null,
+  // Phase 9 E: open the modal pre-populated with an existing draft.
+  // When provided, the modal hydrates body/recipients/subject from it,
+  // sets draftId immediately so attachment uploads route through the
+  // per-draft endpoint, and fetches any already-attached files.
+  editDraft = null,
 }) {
   const dispatch = useDispatch();
   const accounts = useSelector(selectAccounts);
@@ -85,6 +91,17 @@ export default function ComposeModal({
   const dirtyRef = useRef(false);
 
   const bodyRef = useRef(null);
+
+  /* ── Phase 9 attachments ──────────────────────────────────────── */
+  // Each item: { uid, id?, file?, filename, content_type, size_bytes,
+  //              uploading?, error? }
+  // - id present  ⇒ row exists on the server (uploaded or restored)
+  // - file present ⇒ local File, not yet uploaded
+  // uid is a stable client-side key separate from id (id is null for
+  // local files until upload completes).
+  const [attachments, setAttachments] = useState([]);
+  const [maxBytes, setMaxBytes] = useState(25 * 1024 * 1024);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (accounts.length === 0) {
@@ -241,6 +258,160 @@ export default function ComposeModal({
     [accounts]
   );
 
+  /* ── Phase 9 attachment effects + handlers ────────────────────── */
+
+  // Fetch the size cap once on mount.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await attachmentsAPI.getLimits();
+        if (!cancelled && typeof res?.max_bytes === 'number') {
+          setMaxBytes(res.max_bytes);
+        }
+      } catch {
+        // Stay on the conservative 25 MiB default if the call fails.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
+  // Hydrate from a restored draft passed in via the editDraft prop.
+  // Sets recipients/subject/body, captures the draft id, and fetches
+  // already-attached files. Runs once per editDraft change.
+  useEffect(() => {
+    if (!isOpen || !editDraft) return;
+    setDraftId(editDraft.id);
+    setAccountId(editDraft.account_id || '');
+    setTo(editDraft.to_addresses || []);
+    setCc(editDraft.cc_addresses || []);
+    setBcc(editDraft.bcc_addresses || []);
+    setSubject(editDraft.subject || '');
+    setBodyText(stripHtml(editDraft.body_html || '') || editDraft.body_text || '');
+    if (editDraft.cc_addresses?.length || editDraft.bcc_addresses?.length) {
+      setShowCcBcc(true);
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await attachmentsAPI.list(editDraft.id);
+        if (cancelled) return;
+        setAttachments(rows.map((r) => ({
+          uid: `srv-${r.id}`,
+          id: r.id,
+          filename: r.filename,
+          content_type: r.content_type,
+          size_bytes: r.size_bytes,
+        })));
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load draft attachments');
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, editDraft?.id]);
+
+  const totalAttachmentBytes = attachments.reduce((sum, a) => sum + (a.size_bytes || 0), 0);
+  const overCap = totalAttachmentBytes > maxBytes;
+  // Soft warning around 18 MiB (matches the encoded-overhead boundary
+  // for Gmail-class providers — see Phase 9 spec C.note).
+  const SOFT_WARN_BYTES = 18 * 1024 * 1024;
+  const showSoftWarn = !overCap && totalAttachmentBytes >= SOFT_WARN_BYTES;
+
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  // When the user picks files. Append to local state and, if a draftId
+  // already exists, push them to the per-draft endpoint immediately.
+  const handleFilesChosen = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ''; // allow re-picking the same file later
+    if (files.length === 0) return;
+
+    const newItems = files.map((f) => ({
+      uid: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file: f,
+      filename: f.name,
+      content_type: f.type || 'application/octet-stream',
+      size_bytes: f.size,
+    }));
+    setAttachments((prev) => [...prev, ...newItems]);
+
+    // If we have a draft, kick off uploads now. Otherwise the files
+    // sit locally until Send (multipart /compose path) or until a
+    // draft is created via auto-save and the sweep effect catches them.
+    if (draftId) {
+      await uploadPendingItems(newItems, draftId);
+    }
+  };
+
+  // Upload a specific list of pending items to a known draftId.
+  const uploadPendingItems = async (items, currentDraftId) => {
+    if (!items.length) return;
+    setAttachments((prev) => prev.map((a) =>
+      items.find((i) => i.uid === a.uid) ? { ...a, uploading: true, error: null } : a
+    ));
+    try {
+      const filesPayload = items.map((i) => i.file).filter(Boolean);
+      if (!filesPayload.length) return;
+      const created = await attachmentsAPI.upload(currentDraftId, filesPayload);
+      // Replace the local items with their server-row counterparts. We
+      // match on order of upload — the server returns rows in the same
+      // order it received them.
+      setAttachments((prev) => {
+        let createdIdx = 0;
+        return prev.map((a) => {
+          const isThisBatch = items.find((i) => i.uid === a.uid);
+          if (!isThisBatch) return a;
+          const row = created[createdIdx++];
+          if (!row) return { ...a, uploading: false };
+          return {
+            uid: `srv-${row.id}`,
+            id: row.id,
+            filename: row.filename,
+            content_type: row.content_type,
+            size_bytes: row.size_bytes,
+          };
+        });
+      });
+    } catch (err) {
+      setAttachments((prev) => prev.map((a) =>
+        items.find((i) => i.uid === a.uid)
+          ? { ...a, uploading: false, error: err.message || 'Upload failed' }
+          : a
+      ));
+      setError(err.message || 'Failed to upload attachment');
+    }
+  };
+
+  // When the auto-save creates a draft, sweep up any locally-pending
+  // files into the new draft.
+  useEffect(() => {
+    if (!draftId) return;
+    const pending = attachments.filter((a) => a.file && !a.id && !a.uploading);
+    if (pending.length === 0) return;
+    uploadPendingItems(pending, draftId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+
+  const handleRemoveAttachment = async (att) => {
+    if (att.id && draftId) {
+      // Existing server row — DELETE first, drop locally on success.
+      try {
+        await attachmentsAPI.delete(draftId, att.id);
+      } catch (err) {
+        setAttachments((prev) => prev.map((a) =>
+          a.uid === att.uid ? { ...a, error: err.message || 'Could not delete' } : a
+        ));
+        return;
+      }
+    }
+    setAttachments((prev) => prev.filter((a) => a.uid !== att.uid));
+  };
+
   const getCurrentSignature = () => {
     if (!signatureId || !accountId) return '';
     const account = accounts.find((a) => a.id === accountId);
@@ -295,18 +466,52 @@ export default function ComposeModal({
       setError('Please select an account to send from');
       return;
     }
+    if (overCap) {
+      setError(
+        `Attachments total ${formatBytes(totalAttachmentBytes)} — ` +
+        `over the ${formatBytes(maxBytes)} limit. Remove some files first.`
+      );
+      return;
+    }
 
     setIsSending(true);
     setError(null);
 
     try {
-      await composeAPI.send(buildPayload(false));
+      const payload = buildPayload(false);
+      const pendingFiles = attachments.filter((a) => a.file && !a.id);
+
+      if (draftId) {
+        // Restored-draft / auto-saved-draft path. Sweep any locally-
+        // queued files into the draft first, then send by message id.
+        if (pendingFiles.length > 0) {
+          await uploadPendingItems(pendingFiles, draftId);
+        }
+        await composeAPI.sendExistingDraft({
+          ...payload,
+          existing_message_id: draftId,
+        });
+      } else if (pendingFiles.length > 0) {
+        // New compose with attachments — multipart /compose creates the
+        // draft + uploads + sends in one request.
+        await composeAPI.sendWithAttachments(
+          payload,
+          pendingFiles.map((p) => p.file),
+        );
+      } else {
+        // No attachments, no draft yet — JSON path (original behavior).
+        await composeAPI.send(payload);
+      }
+
       // Auto-archive the thread we replied to
       if (replyTo?.id) {
         dispatch(archiveThread(replyTo.id));
       }
       resetAndClose();
     } catch (err) {
+      // 502 from the backend's send-failure path includes "open it
+      // from the Drafts folder to retry" — surface as inline error,
+      // keep the modal open with attachments intact (Phase 9 E.8).
       setError(err.message || 'Failed to send email');
     } finally {
       setIsSending(false);
@@ -376,6 +581,7 @@ export default function ComposeModal({
     setError(null);
     setDraftId(null);
     setLastSavedAt(null);
+    setAttachments([]);
     dirtyRef.current = false;
     setAccountId(defaultAccount?.id || '');
     onClose();
@@ -560,13 +766,84 @@ export default function ComposeModal({
               </div>
             )}
 
+            {/* Attachments list (Phase 9) */}
+            {attachments.length > 0 && (
+              <div className={styles.attachments} data-testid="compose-attachments">
+                <div className={styles.attachmentList}>
+                  {attachments.map((att) => (
+                    <div
+                      key={att.uid}
+                      className={[
+                        styles.attachmentItem,
+                        att.uploading ? styles.attachmentUploading : '',
+                        att.error ? styles.attachmentError : '',
+                      ].filter(Boolean).join(' ')}
+                    >
+                      <Paperclip size={12} className={styles.attachmentIcon} />
+                      {att.id && draftId ? (
+                        <a
+                          href={attachmentsAPI.downloadUrl(draftId, att.id)}
+                          className={styles.attachmentName}
+                          download={att.filename}
+                        >
+                          {att.filename}
+                        </a>
+                      ) : (
+                        <span className={styles.attachmentName}>{att.filename}</span>
+                      )}
+                      <span className={styles.attachmentSize}>
+                        {formatBytes(att.size_bytes)}
+                      </span>
+                      {att.uploading && (
+                        <span className={styles.attachmentStatus}>uploading…</span>
+                      )}
+                      {att.error && (
+                        <span className={styles.attachmentStatus} title={att.error}>
+                          {att.error}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className={styles.attachmentRemove}
+                        onClick={() => handleRemoveAttachment(att)}
+                        title="Remove attachment"
+                        aria-label={`Remove ${att.filename}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className={[
+                    styles.attachmentMeter,
+                    overCap ? styles.attachmentMeterOver : '',
+                    showSoftWarn ? styles.attachmentMeterWarn : '',
+                  ].filter(Boolean).join(' ')}
+                  data-testid="compose-attachments-meter"
+                >
+                  {formatBytes(totalAttachmentBytes)} / {formatBytes(maxBytes)} used
+                  {overCap && (
+                    <span className={styles.attachmentMeterMsg}>
+                      — over the limit, remove some files to send
+                    </span>
+                  )}
+                  {showSoftWarn && (
+                    <span className={styles.attachmentMeterMsg}>
+                      — approaching Gmail's practical limit (encoding overhead)
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {error && <div className={styles.error}>{error}</div>}
 
             <div className={styles.footer}>
               <button
                 className={styles.sendButton}
                 onClick={handleSend}
-                disabled={isSending || to.length === 0}
+                disabled={isSending || to.length === 0 || overCap}
                 type="button"
               >
                 <Send size={14} />
@@ -598,9 +875,19 @@ export default function ComposeModal({
                   className={styles.footerBtn}
                   title="Attach file"
                   type="button"
+                  onClick={handleAttachClick}
+                  data-testid="compose-attach-button"
                 >
                   <Paperclip size={16} />
                 </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  data-testid="compose-file-input"
+                  onChange={handleFilesChosen}
+                />
                 <button
                   className={`${styles.footerBtn} ${styles.discardBtn}`}
                   onClick={resetAndClose}

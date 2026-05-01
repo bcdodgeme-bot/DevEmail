@@ -149,7 +149,7 @@ class TestManualMove:
 
         client, app = await _client_with_auth_override(user)
         try:
-            r = await client.post(
+            r = await client.patch(
                 f"/api/messages/{m.id}/category",
                 json={"category": "bulk", "apply_to_domain": False, "apply_to_existing": False},
             )
@@ -173,17 +173,71 @@ class TestManualMove:
         assert rows[0].category == "bulk"
         assert rows[0].learned_from == "manual_move"
 
+    async def test_both_unchecked_still_writes_classification_row(self, db, account_a, user):
+        """
+        Phase 8 D verification (lock-in): a manual move with both checkboxes
+        UNCHECKED must still upsert a sender_classifications row. Otherwise
+        the next message from this sender would reclassify back to default
+        and the user's intent would be forgotten.
+
+        Behaviour: address-level rule (is_domain_rule=False), category set
+        to the move target, learned_from='manual_move', and only the target
+        message is touched (applied_to_existing_count == 0).
+        """
+        from sqlalchemy import select
+        from app.models.message import Message
+        from app.models.sender_classification import SenderClassification
+
+        target = await _add_message(db, account_a, from_address="single@x.com", category="people")
+        # A pre-existing message from the same sender that should NOT move.
+        sibling = await _add_message(db, account_a, from_address="single@x.com", category="people")
+        await db.commit()
+
+        client, app = await _client_with_auth_override(user)
+        try:
+            r = await client.patch(
+                f"/api/messages/{target.id}/category",
+                json={"category": "bulk", "apply_to_domain": False, "apply_to_existing": False},
+            )
+            assert r.status_code == 200
+            assert r.json()["applied_to_existing_count"] == 0
+        finally:
+            app.dependency_overrides.clear()
+            await client.aclose()
+
+        # 1. Rule was created, address-level, learned_from='manual_move'.
+        rules = (await db.execute(
+            select(SenderClassification).where(
+                SenderClassification.account_id == account_a.id,
+                SenderClassification.sender_address == "single@x.com",
+            )
+        )).scalars().all()
+        assert len(rules) == 1
+        assert rules[0].is_domain_rule is False
+        assert rules[0].category == "bulk"
+        assert rules[0].learned_from == "manual_move"
+
+        # 2. Target moved.
+        target_row = (await db.execute(select(Message).where(Message.id == target.id))).scalar_one()
+        assert target_row.category == "bulk"
+        assert target_row.category_source == "override"
+
+        # 3. Sibling NOT moved (apply_to_existing was False).
+        sibling_row = (await db.execute(select(Message).where(Message.id == sibling.id))).scalar_one()
+        assert sibling_row.category == "people"
+        assert sibling_row.category_source == "default"
+
     async def test_second_call_updates_existing_rule(self, db, account_a, user):
         m = await _add_message(db, account_a, from_address="x@y.com", category="people")
         await db.commit()
 
         client, app = await _client_with_auth_override(user)
         try:
-            await client.post(
+            await client.patch(
                 f"/api/messages/{m.id}/category",
                 json={"category": "bulk", "apply_to_domain": False, "apply_to_existing": False},
             )
-            await client.post(
+            await client.patch(
                 f"/api/messages/{m.id}/category",
                 json={"category": "people", "apply_to_domain": False, "apply_to_existing": False},
             )
@@ -213,7 +267,7 @@ class TestManualMove:
 
         client, app = await _client_with_auth_override(user)
         try:
-            r = await client.post(
+            r = await client.patch(
                 f"/api/messages/{m1.id}/category",
                 json={"category": "bulk", "apply_to_domain": False, "apply_to_existing": True},
             )
@@ -243,7 +297,7 @@ class TestManualMove:
 
         client, app = await _client_with_auth_override(user)
         try:
-            r = await client.post(
+            r = await client.patch(
                 f"/api/messages/{m1.id}/category",
                 json={"category": "bulk", "apply_to_domain": True, "apply_to_existing": True},
             )
@@ -269,7 +323,7 @@ class TestManualMove:
         # Authenticate as a *different* user.
         client, app = await _client_with_auth_override(other_user)
         try:
-            r = await client.post(
+            r = await client.patch(
                 f"/api/messages/{m.id}/category",
                 json={"category": "bulk", "apply_to_domain": False, "apply_to_existing": False},
             )

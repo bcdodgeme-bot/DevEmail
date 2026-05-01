@@ -60,9 +60,13 @@ def decode_mime_header(value: str) -> str:
 
 
 def parse_address(raw: str) -> dict:
-    """Parse 'Name <email>' into {name, address}."""
+    """Parse 'Name <email>' into {name, address}.
+
+    Address is lowercased + stripped at ingest (Phase 8). Display name
+    preserves casing.
+    """
     name, addr = parseaddr(raw)
-    return {"name": decode_mime_header(name), "address": addr}
+    return {"name": decode_mime_header(name), "address": (addr or "").strip().lower()}
 
 
 def parse_address_list(raw: str) -> list[dict]:

@@ -59,11 +59,11 @@ export default function AppShell() {
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
-  /* Listen for compose events from Contacts page */
+  /* Listen for compose events from Contacts page, draft "Edit" buttons, etc. */
   useEffect(() => {
     function handleComposeEvent(e) {
-      const { to, replyTo, replyAll, forward } = e.detail || {};
-      setComposeProps({ replyTo, replyAll, forward });
+      const { to, replyTo, replyAll, forward, editDraft } = e.detail || {};
+      setComposeProps({ replyTo, replyAll, forward, editDraft });
       if (to) {
         setComposeProps((prev) => ({ ...prev, prefillTo: to }));
       }

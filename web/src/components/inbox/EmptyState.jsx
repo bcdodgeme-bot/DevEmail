@@ -28,12 +28,12 @@ const CATEGORY_EMPTY_CONFIG = {
   people: {
     icon: Users,
     title: 'No people messages',
-    subtitle: 'Mail from your contacts will appear here.',
+    subtitle: 'Mail from your contacts will appear here. Right-click any message and move it here to teach the classifier.',
   },
   bulk: {
     icon: Megaphone,
-    title: 'No bulk messages',
-    subtitle: 'Newsletters, transactional mail, and notifications will appear here.',
+    title: 'No bulk messages yet',
+    subtitle: 'Newsletters, transactional mail, and notifications land here. Right-click any newsletter to move it — the classifier learns from each move.',
   },
 };
 
