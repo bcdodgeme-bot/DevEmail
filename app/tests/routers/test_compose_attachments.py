@@ -59,6 +59,36 @@ class TestAttachmentConfig:
             app.dependency_overrides.clear()
             await client.aclose()
 
+    async def test_config_route_not_shadowed_by_message_id_attachments(
+        self, db, user, monkeypatch,
+    ):
+        """
+        Regression: GET /api/messages/config/attachments was being matched as
+        GET /api/messages/{message_id}/attachments with message_id='config',
+        which triggered an asyncpg UUID-parse failure (DataError 'invalid
+        UUID config'). Static routes must be declared before parameterized
+        routes that share their first segment.
+
+        This test fails if /config/attachments is registered AFTER any
+        /{message_id}/... route.
+        """
+        from app.config import settings
+        monkeypatch.setattr(settings, "ATTACHMENT_MAX_BYTES", 999)
+
+        client, app = await _client_with_auth_override(user)
+        try:
+            r = await client.get("/api/messages/config/attachments")
+            # Specifically NOT a 500: that's what shadowing produces.
+            assert r.status_code == 200, (
+                f"Expected 200, got {r.status_code}. "
+                f"If this is 500, /{{message_id}}/attachments is shadowing "
+                f"/config/attachments — check route registration order."
+            )
+            assert r.json() == {"max_bytes": 999}
+        finally:
+            app.dependency_overrides.clear()
+            await client.aclose()
+
 
 # ---------------------------------------------------------------------------
 # DB-bound: multipart compose

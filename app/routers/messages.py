@@ -42,6 +42,27 @@ from app.models.sender_classification import SenderClassification
 router = APIRouter(prefix="/messages", tags=["messages"])
 
 
+# --- Static-segment routes ---
+# IMPORTANT: routes whose first segment is a literal string (e.g. /config/...,
+# /inbox, /sent, /drafts, /trash, /search, /bulk/*) MUST be declared BEFORE
+# any /{message_id}/... route. Starlette matches in registration order, and
+# /{message_id} happily binds to ANY string — so a request like
+# GET /messages/config/attachments would otherwise be routed to
+# GET /messages/{message_id}/attachments with message_id="config" and blow up
+# in UUID parsing inside _get_message_or_404. Phase 9 hit this in production.
+
+@router.get("/config/attachments")
+async def get_attachment_config(
+    user: User = Depends(get_current_user),
+):
+    """
+    Server-authoritative attachment limits. Frontend fetches this on
+    compose-modal mount and uses it to gate uploads. Backend enforces
+    the same value during compose — the frontend cap is only UX.
+    """
+    return {"max_bytes": settings.ATTACHMENT_MAX_BYTES}
+
+
 # --- Inbox / Thread List ---
 
 @router.get("/inbox", response_model=ThreadListResponse)
@@ -1101,17 +1122,6 @@ async def search_messages(
 
 
 # --- Compose ---
-
-@router.get("/config/attachments")
-async def get_attachment_config(
-    user: User = Depends(get_current_user),
-):
-    """
-    Server-authoritative attachment limits. Frontend fetches this on
-    compose-modal mount and uses it to gate uploads. Backend enforces
-    the same value during compose — the frontend cap is only UX.
-    """
-    return {"max_bytes": settings.ATTACHMENT_MAX_BYTES}
 
 
 async def _parse_compose_payload(request: Request) -> tuple[ComposeRequest, list]:
