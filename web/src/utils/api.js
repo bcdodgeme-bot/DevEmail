@@ -106,6 +106,8 @@ export async function apiFetch(path, opts = {}) {
         throw new Error(body.detail || `API error ${retryRes.status}`);
       }
       if (opts.raw) return retryRes;
+      // 204 No Content (e.g. DELETE) has an empty body — res.json() would throw.
+      if (retryRes.status === 204) return null;
       return retryRes.json();
     } catch (err) {
       throw err;
@@ -118,5 +120,7 @@ export async function apiFetch(path, opts = {}) {
   }
 
   if (opts.raw) return res;
+  // 204 No Content (e.g. DELETE) has an empty body — res.json() would throw.
+  if (res.status === 204) return null;
   return res.json();
 }
