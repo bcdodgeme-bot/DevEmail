@@ -10,7 +10,9 @@ class Signature(Base):
     __tablename__ = "signatures"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    # Nullable + SET NULL: unlinking an account deletes the account row but
+    # keeps its signatures — they become orphaned (account_id = NULL).
+    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     body_html: Mapped[str | None] = mapped_column(String)
     body_text: Mapped[str | None] = mapped_column(String)
