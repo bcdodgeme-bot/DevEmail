@@ -154,17 +154,22 @@
   padding: 0 16px 16px 62px; /* align with text after avatar */
 }
 
+/* HTML emails render on their own white canvas so light/white-background
+   emails stay readable inside the dark app UI. These are baseline values —
+   the email's own inline styles still win over them. */
 .htmlContent {
   font-size: 13px;
   line-height: 1.6;
-  color: #cbd5e1;
+  background: #fff;
+  color: #111;
+  padding: 16px;
+  border-radius: 8px;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
 
-/* Reset common HTML email styles for dark theme */
 .htmlContent a {
-  color: #8b5cf6;
+  color: #6d28d9; /* darker purple — readable on the white canvas */
 }
 
 .htmlContent img {
