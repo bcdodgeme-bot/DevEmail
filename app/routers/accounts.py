@@ -135,7 +135,14 @@ async def unlink_account(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Unlink an email account."""
+    """Unlink an email account.
+
+    Deletes the account row (so we don't retain IMAP credentials) but KEEPS
+    the messages synced from it: messages.account_id is ON DELETE SET NULL, so
+    those messages are orphaned and stay visible in the inbox. Signatures,
+    folders, and classification rules — per-account config, not mail — still
+    cascade away with the account.
+    """
     account = await _get_account_or_404(db, user.id, account_id)
     await db.delete(account)
     await db.commit()

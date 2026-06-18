@@ -36,7 +36,8 @@ class AttachmentResponse(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     thread_id: str
-    account_id: str
+    # None when the source account has been unlinked (message orphaned-but-kept).
+    account_id: Optional[str] = None
     folder_id: Optional[str] = None
     from_address: Optional[str] = None
     from_name: Optional[str] = None

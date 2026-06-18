@@ -99,7 +99,7 @@ export default function AccountManager() {
 
   /* Unlink */
   const handleUnlink = (account) => {
-    if (window.confirm(`Unlink ${account.email_address}? This will remove all synced data.`)) {
+    if (window.confirm(`Unlink ${account.email_address}? This will stop syncing from this account. Your existing emails will be kept.`)) {
       dispatch(unlinkAccount(account.id));
     }
   };

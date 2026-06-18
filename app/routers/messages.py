@@ -1611,7 +1611,8 @@ def _to_thread_response(t: Thread) -> ThreadResponse:
     messages = sorted(t.messages or [], key=lambda m: m.received_at or m.created_at, reverse=True)
     latest = messages[0] if messages else None
     has_unread = any(not m.is_read for m in messages)
-    account_ids = list(set(str(m.account_id) for m in messages))
+    # Orphaned messages (account unlinked) have account_id = None — skip them.
+    account_ids = list(set(str(m.account_id) for m in messages if m.account_id))
 
     return ThreadResponse(
         id=str(t.id),
@@ -1683,7 +1684,7 @@ def _to_message_detail(m: Message) -> MessageDetailResponse:
     return MessageDetailResponse(
         id=str(m.id),
         thread_id=str(m.thread_id),
-        account_id=str(m.account_id),
+        account_id=str(m.account_id) if m.account_id else None,
         folder_id=str(m.folder_id) if m.folder_id else None,
         from_address=m.from_address,
         from_name=m.from_name,
