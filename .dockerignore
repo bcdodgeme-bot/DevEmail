@@ -1,0 +1,31 @@
+# Never ship host-built node_modules into the image — they contain
+# platform-native binaries (esbuild/rollup) built for the host OS/arch.
+# The image's `npm install` must rebuild them for linux. Shipping macOS
+# binaries here is what broke the vite build ("transforming..." crash).
+**/node_modules
+
+# Build output (frontend is rebuilt inside the image)
+web/dist
+dist
+
+# Python caches
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.venv
+venv
+env
+
+# VCS / CI / local
+.git
+.gitignore
+.dockerignore
+
+# OS / editor
+**/.DS_Store
+*.swp
+
+# Local secrets / keys (not needed at build time)
+.env
+.env.*
+*.pem
