@@ -1,7 +1,7 @@
 """keep synced messages when an account is unlinked
 
 Revision ID: keep_messages_on_unlink
-Revises: add_sent_partial_index
+Revises: lowercase_addresses
 Create Date: 2026-06-17
 
 Unlinking an account deletes the account row (so we don't retain IMAP
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 
 revision: str = 'keep_messages_on_unlink'
-down_revision: Union[str, None] = 'add_sent_partial_index'
+down_revision: Union[str, None] = 'lowercase_addresses'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
