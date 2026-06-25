@@ -23,6 +23,9 @@ google-api-python-client==2.159.0
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 
+# Redis (sync backoff/failure state persistence across restarts)
+redis==5.2.1
+
 # IMAP / SMTP
 aioimaplib==1.1.0
 aiosmtplib==3.0.2

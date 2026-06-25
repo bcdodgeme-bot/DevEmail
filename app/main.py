@@ -48,23 +48,25 @@ _BACKOFF_TTL_SECONDS = 3700
 
 async def _get_failures(account_key: str) -> int:
     """Consecutive failure count, preferring Redis over the local fallback."""
-    try:
-        val = await redis_client.get(f"sync:failures:{account_key}")
-        if val is not None:
-            return int(val)
-    except Exception as e:
-        logger.warning("Redis read failed (sync:failures:%s): %s", account_key, e)
+    if redis_client is not None:
+        try:
+            val = await redis_client.get(f"sync:failures:{account_key}")
+            if val is not None:
+                return int(val)
+        except Exception as e:
+            logger.warning("Redis read failed (sync:failures:%s): %s", account_key, e)
     return _sync_failures.get(account_key, 0)
 
 
 async def _get_backoff_until(account_key: str) -> float:
     """Backoff-expiry epoch (wall clock), preferring Redis over the fallback."""
-    try:
-        val = await redis_client.get(f"sync:backoff_until:{account_key}")
-        if val is not None:
-            return float(val)
-    except Exception as e:
-        logger.warning("Redis read failed (sync:backoff_until:%s): %s", account_key, e)
+    if redis_client is not None:
+        try:
+            val = await redis_client.get(f"sync:backoff_until:{account_key}")
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            logger.warning("Redis read failed (sync:backoff_until:%s): %s", account_key, e)
     return _sync_backoff_until.get(account_key, 0.0)
 
 
@@ -72,6 +74,8 @@ async def _set_failure_state(account_key: str, failures: int, backoff_until: flo
     """Persist a failure + backoff expiry to Redis and the local fallback."""
     _sync_failures[account_key] = failures
     _sync_backoff_until[account_key] = backoff_until
+    if redis_client is None:
+        return
     try:
         await redis_client.set(f"sync:failures:{account_key}", failures)
         await redis_client.set(
@@ -85,6 +89,8 @@ async def _clear_failure_state(account_key: str):
     """Clear failure + backoff state (called on a successful sync)."""
     _sync_failures[account_key] = 0
     _sync_backoff_until.pop(account_key, None)
+    if redis_client is None:
+        return
     try:
         await redis_client.delete(
             f"sync:failures:{account_key}",
