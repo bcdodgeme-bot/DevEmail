@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import logging
 from collections import defaultdict
@@ -13,6 +14,7 @@ from sqlalchemy import select, and_
 
 from app.config import settings
 from app.database import async_session
+from app.redis import redis_client
 from app.models.account import Account
 from app.models.thread import Thread
 from app.services.imap_sync import sync_account
@@ -30,9 +32,66 @@ SYNC_BACKOFF_BASE = 60         # start backoff at 60s, doubling each failure
 REMINDER_CHECK_INTERVAL_SECONDS = 60  # check every minute
 REMINDER_OFFSETS = [60, 30, 10]       # minutes before event
 
-# Track per-account consecutive failure counts and backoff expiry
+# Track per-account consecutive failure counts and backoff expiry.
+# These dicts are only a local fallback — the source of truth is Redis, so the
+# backoff/circuit-breaker state survives container restarts. Without that, a
+# redeploy resets every backing-off account to zero and they all reconnect at
+# once, which gets the host IP rate-banned by the mail server.
+#   sync:failures:{account_id}      -> int, no TTL
+#   sync:backoff_until:{account_id} -> float wall-clock epoch, TTL 3700s
+#       (just over the 3600s max backoff so the key always outlives its window)
 _sync_failures: dict[str, int] = defaultdict(int)
 _sync_backoff_until: dict[str, float] = {}
+
+_BACKOFF_TTL_SECONDS = 3700
+
+
+async def _get_failures(account_key: str) -> int:
+    """Consecutive failure count, preferring Redis over the local fallback."""
+    try:
+        val = await redis_client.get(f"sync:failures:{account_key}")
+        if val is not None:
+            return int(val)
+    except Exception as e:
+        logger.warning("Redis read failed (sync:failures:%s): %s", account_key, e)
+    return _sync_failures.get(account_key, 0)
+
+
+async def _get_backoff_until(account_key: str) -> float:
+    """Backoff-expiry epoch (wall clock), preferring Redis over the fallback."""
+    try:
+        val = await redis_client.get(f"sync:backoff_until:{account_key}")
+        if val is not None:
+            return float(val)
+    except Exception as e:
+        logger.warning("Redis read failed (sync:backoff_until:%s): %s", account_key, e)
+    return _sync_backoff_until.get(account_key, 0.0)
+
+
+async def _set_failure_state(account_key: str, failures: int, backoff_until: float):
+    """Persist a failure + backoff expiry to Redis and the local fallback."""
+    _sync_failures[account_key] = failures
+    _sync_backoff_until[account_key] = backoff_until
+    try:
+        await redis_client.set(f"sync:failures:{account_key}", failures)
+        await redis_client.set(
+            f"sync:backoff_until:{account_key}", backoff_until, ex=_BACKOFF_TTL_SECONDS
+        )
+    except Exception as e:
+        logger.warning("Redis write failed for %s: %s", account_key, e)
+
+
+async def _clear_failure_state(account_key: str):
+    """Clear failure + backoff state (called on a successful sync)."""
+    _sync_failures[account_key] = 0
+    _sync_backoff_until.pop(account_key, None)
+    try:
+        await redis_client.delete(
+            f"sync:failures:{account_key}",
+            f"sync:backoff_until:{account_key}",
+        )
+    except Exception as e:
+        logger.warning("Redis clear failed for %s: %s", account_key, e)
 
 
 # --------------------------------------------------
@@ -41,7 +100,6 @@ _sync_backoff_until: dict[str, float] = {}
 
 async def periodic_sync():
     """Background task that syncs all enabled accounts every 5 minutes."""
-    import time
     # Wait a bit on startup to let the app fully initialize
     await asyncio.sleep(10)
     logger.info("Background sync task started (every %d seconds)", SYNC_INTERVAL_SECONDS)
@@ -59,13 +117,20 @@ async def periodic_sync():
                 else:
                     for account in accounts_list:
                         account_key = str(account.id)
-                        now = time.monotonic()
+                        now = time.time()
 
-                        # Skip if in backoff window
-                        if _sync_backoff_until.get(account_key, 0) > now:
-                            remaining = int(_sync_backoff_until[account_key] - now)
+                        # Skip if in backoff window. Read from Redis so the
+                        # window survives container restarts.
+                        backoff_until = await _get_backoff_until(account_key)
+                        if backoff_until > now:
+                            remaining = int(backoff_until - now)
                             logger.info("Skipping %s — backoff for %ds more", account.email_address, remaining)
                             continue
+
+                        # Stagger connections so all accounts don't hit the mail
+                        # server in the same instant (a burst looks like an
+                        # attack and gets the host IP rate-banned).
+                        await asyncio.sleep(2)
 
                         try:
                             if account.provider == "gmail":
@@ -80,13 +145,11 @@ async def periodic_sync():
                                     summary.get("skipped", 0),
                                 )
                             # Reset failure count on success
-                            _sync_failures[account_key] = 0
-                            _sync_backoff_until.pop(account_key, None)
+                            await _clear_failure_state(account_key)
                         except Exception as e:
-                            failures = _sync_failures[account_key] + 1
-                            _sync_failures[account_key] = failures
+                            failures = (await _get_failures(account_key)) + 1
                             backoff = min(SYNC_BACKOFF_BASE * (2 ** (failures - 1)), 3600)
-                            _sync_backoff_until[account_key] = now + backoff
+                            await _set_failure_state(account_key, failures, now + backoff)
                             logger.error(
                                 "Auto-sync failed for %s (failure %d/%d, backoff %ds): %s",
                                 account.email_address, failures, SYNC_MAX_FAILURES, backoff, e,

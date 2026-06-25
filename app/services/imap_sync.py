@@ -24,6 +24,7 @@ from app.models.account import Account
 from app.models.thread import Thread
 from app.models.message import Message
 from app.services.classification import ClassificationBatch
+from app.services.crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
@@ -224,13 +225,17 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     if not account.imap_host or not account.username or not account.password:
         return {"error": "Account missing IMAP credentials"}
 
+    # Passwords are stored Fernet-encrypted (see app/services/crypto.py).
+    # Decrypt before handing the credential to imaplib, or every login fails.
+    password = decrypt_credential(account.password)
+
     try:
         raw_messages = await asyncio.to_thread(
             _imap_fetch_all,
             account.imap_host,
             account.imap_port or 993,
             account.username,
-            account.password,
+            password,
         )
     except Exception as e:
         logger.error(f"IMAP fetch failed for {account.email_address}: {e}")
