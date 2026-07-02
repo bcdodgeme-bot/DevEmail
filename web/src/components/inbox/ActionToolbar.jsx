@@ -9,11 +9,13 @@ import {
   Star,
   MailX,
   Clock,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   toggleStar,
   archiveThread,
   trashThread,
+  markThreadSpam,
   markUnread,
   snoozeThread,
   unsnoozeThread,
@@ -161,6 +163,15 @@ export default function ActionToolbar({ thread }) {
       >
         <Archive size={16} />
         <span className={styles.label}>Archive</span>
+      </button>
+
+      <button
+        className={styles.btn}
+        onClick={() => dispatch(markThreadSpam(thread.id))}
+        title="Mark as spam — move to Junk"
+      >
+        <ShieldAlert size={16} />
+        <span className={styles.label}>Spam</span>
       </button>
 
       <button

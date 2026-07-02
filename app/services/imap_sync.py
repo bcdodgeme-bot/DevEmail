@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.thread import Thread
 from app.models.message import Message
+from app.models.folder import Folder
 from app.services.classification import ClassificationBatch
 from app.services.crypto import decrypt_credential
 
@@ -170,44 +171,229 @@ def count_attachments(msg: email.message.Message) -> int:
     return count
 
 
+# ── IMAP folder helpers ────────────────────────────────
+
+MAX_MESSAGES_PER_FOLDER = 200  # bound first-run backfill so we don't hammer the server
+
+# Folder-name → category, matched case-insensitively on the leaf name.
+# (Stalwart/Dovecot use "." or "/" as the hierarchy delimiter.)
+_SENT_FOLDERS = {"sent", "sent items", "sent mail", "sent messages"}
+_DRAFT_FOLDERS = {"drafts", "draft"}
+_TRASH_FOLDERS = {"trash", "deleted", "deleted items", "deleted messages", "bin"}
+_JUNK_FOLDERS = {"junk", "spam", "junk email", "junk e-mail"}
+_ARCHIVE_FOLDERS = {"archive", "archived", "all mail"}
+_SYSTEM_FOLDERS = (
+    {"inbox"} | _SENT_FOLDERS | _DRAFT_FOLDERS | _TRASH_FOLDERS | _JUNK_FOLDERS | _ARCHIVE_FOLDERS
+)
+
+_LIST_RE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?:"[^"]*"|NIL|\S+)\s+(?P<name>.+)$')
+
+
+def _folder_leaf(name: str) -> str:
+    """Leaf name of a hierarchical mailbox path, delimiter-agnostic."""
+    return name.rsplit("/", 1)[-1].rsplit(".", 1)[-1].strip()
+
+
+def _categorize_folder(name: str) -> dict:
+    """Map an IMAP folder name to the message flags it implies."""
+    leaf = _folder_leaf(name).lower()
+    return {
+        "is_sent": leaf in _SENT_FOLDERS,
+        "is_draft": leaf in _DRAFT_FOLDERS,
+        "is_trashed": leaf in _TRASH_FOLDERS,
+        "is_spam": leaf in _JUNK_FOLDERS,
+        "is_archived": leaf in _ARCHIVE_FOLDERS,
+        "is_system": leaf in _SYSTEM_FOLDERS,
+    }
+
+
+def _imap_quote(name: str) -> str:
+    """Quote a mailbox name for SELECT (handles spaces)."""
+    return '"' + name.replace('"', '\\"') + '"'
+
+
+def _parse_list_line(line) -> Optional[str]:
+    """Extract a selectable mailbox name from one LIST response line."""
+    if isinstance(line, tuple):
+        line = line[0]
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", errors="replace")
+    if not isinstance(line, str):
+        return None
+    m = _LIST_RE.match(line.strip())
+    if not m:
+        return None
+    if "\\Noselect" in m.group("flags") or "\\NonExistent" in m.group("flags"):
+        return None
+    name = m.group("name").strip()
+    if len(name) >= 2 and name[0] == '"' and name[-1] == '"':
+        name = name[1:-1]
+    return name or None
+
+
+def _parse_fetch_meta(meta) -> tuple[Optional[str], set]:
+    """Pull the UID and FLAGS out of a FETCH response metadata line."""
+    if isinstance(meta, bytes):
+        meta = meta.decode("utf-8", errors="replace")
+    uid = None
+    m = re.search(r"\bUID\s+(\d+)", meta)
+    if m:
+        uid = m.group(1)
+    flags = set()
+    fm = re.search(r"FLAGS\s+\(([^)]*)\)", meta)
+    if fm:
+        flags = set(fm.group(1).split())
+    return uid, flags
+
+
 # ── IMAP fetching (synchronous, runs in thread) ───────
 
-def _imap_fetch_all(host: str, port: int, username: str, password: str, folder: str = "INBOX") -> list[bytes]:
-    """Connect to IMAP and fetch all messages as raw bytes. Runs synchronously."""
+def _imap_fetch_all(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    max_per_folder: int = MAX_MESSAGES_PER_FOLDER,
+) -> list[dict]:
+    """Connect to IMAP and fetch messages from every selectable folder.
+
+    Returns a list of {folder, uid, flags, raw} dicts (the newest
+    ``max_per_folder`` per folder). Runs synchronously in a worker thread.
+    """
     logger.info(f"Connecting to IMAP {host}:{port} as {username}")
 
     mail = imaplib.IMAP4_SSL(host, port)
     mail.login(username, password)
-    mail.select(folder, readonly=True)
 
-    # Search for all messages
-    status, data = mail.search(None, "ALL")
-    if status != "OK" or not data[0]:
-        logger.info("No messages found in mailbox")
-        mail.logout()
-        return []
+    records: list[dict] = []
+    try:
+        status, list_data = mail.list()
+        folders: list[str] = []
+        if status == "OK" and list_data:
+            for line in list_data:
+                parsed = _parse_list_line(line)
+                if parsed:
+                    folders.append(parsed)
+        if not folders:
+            folders = ["INBOX"]
 
-    message_nums = data[0].split()
-    logger.info(f"Found {len(message_nums)} messages in {folder}")
+        for folder in folders:
+            try:
+                status, _ = mail.select(_imap_quote(folder), readonly=True)
+                if status != "OK":
+                    logger.warning("Could not select folder %s", folder)
+                    continue
 
-    raw_messages = []
-    for num in message_nums:
-        status, msg_data = mail.fetch(num, "(UID RFC822)")
-        if status == "OK" and msg_data[0] is not None:
-            if isinstance(msg_data[0], tuple):
-                uid_line = msg_data[0][0].decode("utf-8", errors="replace")
-                raw_email = msg_data[0][1]
-                uid = None
-                if b"UID" in msg_data[0][0]:
-                    parts = uid_line.split()
-                    for i, p in enumerate(parts):
-                        if p.upper() == "UID" and i + 1 < len(parts):
-                            uid = parts[i + 1].rstrip(")")
-                            break
-                raw_messages.append((uid, raw_email))
+                status, data = mail.search(None, "ALL")
+                if status != "OK" or not data or not data[0]:
+                    continue
 
-    mail.logout()
-    return raw_messages
+                nums = data[0].split()
+                if max_per_folder and len(nums) > max_per_folder:
+                    nums = nums[-max_per_folder:]
+                logger.info("Fetching %d message(s) from %s", len(nums), folder)
+
+                for num in nums:
+                    status, msg_data = mail.fetch(num, "(UID FLAGS RFC822)")
+                    if status != "OK" or not msg_data or msg_data[0] is None:
+                        continue
+                    if isinstance(msg_data[0], tuple):
+                        uid, flags = _parse_fetch_meta(msg_data[0][0])
+                        records.append({
+                            "folder": folder,
+                            "uid": uid,
+                            "flags": flags,
+                            "raw": msg_data[0][1],
+                        })
+            except Exception as e:
+                logger.warning("Skipping folder %s: %s", folder, e)
+                continue
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+    return records
+
+
+def _imap_move(host, port, username, password, dest_folder: str, by_source: dict) -> int:
+    """Move messages to dest_folder on the server. Runs synchronously.
+
+    by_source maps a source mailbox name → list of UID strings. Uses UID MOVE
+    (RFC 6851) with a COPY+delete+EXPUNGE fallback for servers without it.
+    """
+    mail = imaplib.IMAP4_SSL(host, port)
+    mail.login(username, password)
+    moved = 0
+    dest = _imap_quote(dest_folder)
+    try:
+        for source, uids in by_source.items():
+            uids = [u for u in uids if u]
+            if not uids:
+                continue
+            try:
+                status, _ = mail.select(_imap_quote(source))  # read-write
+                if status != "OK":
+                    logger.warning("Move: could not select %s", source)
+                    continue
+                uid_set = ",".join(uids)
+                try:
+                    typ, _ = mail.uid("MOVE", uid_set, dest)
+                    ok = typ == "OK"
+                except Exception:
+                    ok = False
+                if not ok:
+                    mail.uid("COPY", uid_set, dest)
+                    mail.uid("STORE", uid_set, "+FLAGS", r"(\Deleted)")
+                    mail.expunge()
+                moved += len(uids)
+            except Exception as e:
+                logger.warning("IMAP move from %s to %s failed: %s", source, dest_folder, e)
+                continue
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+    return moved
+
+
+async def move_messages_to_folder(account: Account, messages: list, dest_folder: str) -> int:
+    """Move the given messages to dest_folder on the IMAP server (best effort).
+
+    Derives the source mailbox + UID from each message's remote_id
+    (``{folder}:{uid}``). Legacy ``stalwart:{uid}`` ids are treated as INBOX.
+    Messages with no server-side id (locally composed, never synced) are skipped.
+    """
+    if not account.imap_host or not account.username or not account.password:
+        return 0
+
+    by_source: dict[str, list[str]] = {}
+    for m in messages:
+        rid = getattr(m, "remote_id", None)
+        if not rid or ":" not in rid:
+            continue
+        source, uid = rid.rsplit(":", 1)
+        if source == "stalwart":
+            source = "INBOX"  # pre-folder-aware remote_id scheme
+        if not uid.isdigit():
+            continue
+        by_source.setdefault(source, []).append(uid)
+
+    if not by_source:
+        return 0
+
+    password = decrypt_credential(account.password)
+    return await asyncio.to_thread(
+        _imap_move,
+        account.imap_host,
+        account.imap_port or 993,
+        account.username,
+        password,
+        dest_folder,
+        by_source,
+    )
 
 
 # ── Main sync function ─────────────────────────────────
@@ -230,7 +416,7 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     password = decrypt_credential(account.password)
 
     try:
-        raw_messages = await asyncio.to_thread(
+        records = await asyncio.to_thread(
             _imap_fetch_all,
             account.imap_host,
             account.imap_port or 993,
@@ -241,7 +427,7 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
         logger.error(f"IMAP fetch failed for {account.email_address}: {e}")
         return {"error": f"IMAP connection failed: {str(e)}"}
 
-    if not raw_messages:
+    if not records:
         return {"fetched": 0, "new": 0, "skipped": 0}
 
     # Get existing message_id_headers to avoid duplicates
@@ -261,25 +447,62 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     )
     existing_remote_ids = set(row[0] for row in existing_remote_result.all())
 
+    # Cache of folder name → Folder.id, seeded from existing rows; missing
+    # folders are created lazily as we encounter their messages.
+    existing_folders = await db.execute(
+        select(Folder).where(Folder.account_id == account.id)
+    )
+    folder_ids: dict[str, uuid.UUID] = {
+        f.remote_id: f.id for f in existing_folders.scalars().all() if f.remote_id
+    }
+
+    async def _folder_id_for(name: str) -> uuid.UUID:
+        if name in folder_ids:
+            return folder_ids[name]
+        cat = _categorize_folder(name)
+        folder = Folder(
+            account_id=account.id,
+            name=_folder_leaf(name) or name,
+            remote_id=name,
+            folder_type="system" if cat["is_system"] else "custom",
+        )
+        db.add(folder)
+        await db.flush()
+        folder_ids[name] = folder.id
+        return folder.id
+
     new_count = 0
     skipped_count = 0
 
     # One classifier batch per sync run.
     classifier = ClassificationBatch(db, account.id, user_id)
 
-    for uid, raw_email in raw_messages:
-        msg = email.message_from_bytes(raw_email)
+    for rec in records:
+        folder_name = rec["folder"]
+        uid = rec["uid"]
+        imap_flags = rec["flags"]
+        msg = email.message_from_bytes(rec["raw"])
 
         message_id = msg.get("Message-ID", "").strip()
-        remote_id = f"stalwart:{uid}" if uid else None
+        remote_id = f"{folder_name}:{uid}" if uid else None
 
-        # Skip duplicates
+        # Skip duplicates. Message-ID is the primary key across folders so a
+        # message already synced from INBOX isn't re-imported under its new
+        # folder-scoped remote_id.
         if message_id and message_id in existing_msg_ids:
             skipped_count += 1
             continue
         if remote_id and remote_id in existing_remote_ids:
             skipped_count += 1
             continue
+
+        # Folder → category flags, plus IMAP \Seen / \Flagged / \Draft state.
+        cat = _categorize_folder(folder_name)
+        folder_id = await _folder_id_for(folder_name)
+        is_sent = cat["is_sent"]
+        is_draft = cat["is_draft"] or ("\\Draft" in imap_flags)
+        is_read = ("\\Seen" in imap_flags) or is_sent or is_draft
+        is_starred = "\\Flagged" in imap_flags
 
         # Parse headers
         subject = decode_mime_header(msg.get("Subject", ""))
@@ -306,21 +529,24 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
             date=date,
         )
 
-        # Classify People / Bulk before INSERT. This IMAP path doesn't
-        # surface an is_sent flag (everything fetched here is treated as
-        # received), so always run the classifier.
-        classifier_headers = {k: v for k, v in msg.items()}
-        category, category_source = await classifier.classify(
-            from_address=from_parsed["address"],
-            headers=classifier_headers,
-            content_type=msg.get("Content-Type"),
-            remote_id=remote_id,
-        )
+        # Classify People / Bulk before INSERT. Sent/draft mail is authored by
+        # the user, not received, so skip the classifier for those.
+        if is_sent or is_draft:
+            category, category_source = "people", "default"
+        else:
+            classifier_headers = {k: v for k, v in msg.items()}
+            category, category_source = await classifier.classify(
+                from_address=from_parsed["address"],
+                headers=classifier_headers,
+                content_type=msg.get("Content-Type"),
+                remote_id=remote_id,
+            )
 
         # Create message
         new_message = Message(
             thread_id=thread.id,
             account_id=account.id,
+            folder_id=folder_id,
             remote_id=remote_id,
             message_id_header=message_id or None,
             in_reply_to=in_reply_to,
@@ -334,7 +560,13 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
             body_html=body_html,
             body_text=body_text,
             snippet=snippet,
-            is_read=False,
+            is_read=is_read,
+            is_starred=is_starred,
+            is_draft=is_draft,
+            is_sent=is_sent,
+            is_trashed=cat["is_trashed"],
+            is_archived=cat["is_archived"],
+            is_spam=cat["is_spam"],
             has_attachments=attachment_count > 0,
             received_at=date,
             category=category,
@@ -372,10 +604,10 @@ async def sync_account(account: Account, user_id: uuid.UUID, db: AsyncSession) -
     except IntegrityError:
         await db.rollback()
         logger.warning(f"Duplicate message(s) detected during batch commit for {account.email_address}, rolling back batch")
-        return {"fetched": len(raw_messages), "new": 0, "skipped": len(raw_messages)}
+        return {"fetched": len(records), "new": 0, "skipped": len(records)}
 
     logger.info(f"Sync complete for {account.email_address}: {new_count} new, {skipped_count} skipped")
-    return {"fetched": len(raw_messages), "new": new_count, "skipped": skipped_count}
+    return {"fetched": len(records), "new": new_count, "skipped": skipped_count}
 
 
 async def _find_or_create_thread(

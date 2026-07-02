@@ -82,6 +82,8 @@ export default function App() {
           <Route path={ROUTES.SENT} element={<Inbox />} />
           <Route path={ROUTES.DRAFTS} element={<Inbox />} />
           <Route path={ROUTES.TRASH} element={<Inbox />} />
+          <Route path={ROUTES.SPAM} element={<Inbox />} />
+          <Route path="folder/:folderId" element={<Inbox />} />
           <Route path={ROUTES.CONTACTS} element={<Contacts />} />
           <Route path="contacts/:contactId" element={<Contacts />} />
           <Route path={ROUTES.CALENDAR} element={<CalendarPage />} />

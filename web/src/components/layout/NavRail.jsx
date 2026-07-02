@@ -1,9 +1,13 @@
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   Mail,
   Send,
   FileEdit,
   Trash2,
+  ShieldAlert,
+  Folder as FolderIcon,
   Users,
   Calendar,
   Search,
@@ -12,6 +16,7 @@ import {
   PenSquare,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { fetchFolders, selectCustomFolders } from '../../store/foldersSlice';
 import { getInitials, getAvatarGradient } from '../../utils/avatarColor';
 import { ROUTES } from '../../utils/constants';
 import styles from './NavRail.module.css';
@@ -20,6 +25,7 @@ const NAV_ITEMS = [
   { path: ROUTES.INBOX, icon: Mail, label: 'Inbox', badge: true },
   { path: ROUTES.SENT, icon: Send, label: 'Sent' },
   { path: ROUTES.DRAFTS, icon: FileEdit, label: 'Drafts' },
+  { path: ROUTES.SPAM, icon: ShieldAlert, label: 'Junk' },
   { path: ROUTES.TRASH, icon: Trash2, label: 'Trash' },
 ];
 
@@ -31,6 +37,12 @@ const SECONDARY_ITEMS = [
 export default function NavRail({ unreadCount = 0, onCompose, onSearch }) {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const dispatch = useDispatch();
+  const customFolders = useSelector(selectCustomFolders);
+
+  useEffect(() => {
+    dispatch(fetchFolders());
+  }, [dispatch]);
 
   return (
     <nav className={styles.rail} aria-label="Main navigation">
@@ -76,6 +88,25 @@ export default function NavRail({ unreadCount = 0, onCompose, onSearch }) {
           </NavLink>
         ))}
       </div>
+
+      {/* Custom (server-synced) folders */}
+      {customFolders.length > 0 && (
+        <div className={styles.section}>
+          {customFolders.map((f) => (
+            <NavLink
+              key={f.id}
+              to={`/folder/${f.id}`}
+              className={({ isActive }) =>
+                `${styles.navItem} ${isActive ? styles.active : ''}`
+              }
+              title={f.name}
+              aria-label={f.name}
+            >
+              <FolderIcon size={20} strokeWidth={1.75} />
+            </NavLink>
+          ))}
+        </div>
+      )}
 
       {/* Divider */}
       <div className={styles.divider} />

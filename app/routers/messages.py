@@ -122,11 +122,18 @@ async def get_inbox(
         query = query.where(category_filter)
         count_query = count_query.where(category_filter)
 
-    # Exclude threads where ALL messages are trashed
+    # A thread belongs in the inbox only if it has at least one genuinely
+    # received message — i.e. not trashed/archived/spam, and not one of the
+    # user's own sent messages or drafts. This keeps folder-synced Sent/Drafts/
+    # Junk/Trash mail out of the inbox while conversations you've replied to
+    # (which still contain the received message) stay.
     active_msg_filter = Thread.id.in_(
         select(Message.thread_id).where(
             Message.is_trashed == False,
             Message.is_archived == False,
+            Message.is_spam == False,
+            Message.is_sent == False,
+            Message.is_draft == False,
         )
     )
     query = query.where(active_msg_filter)
@@ -332,6 +339,84 @@ async def get_trash(
     )
 
 
+@router.get("/spam", response_model=ThreadListResponse)
+async def get_spam(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=2000),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get spam / Junk-folder messages."""
+    spam_thread_ids = select(Message.thread_id).where(
+        Message.is_spam == True,
+        Message.account_id.in_(
+            select(Account.id).where(Account.user_id == user.id)
+        ),
+    )
+
+    query = (
+        select(Thread)
+        .where(Thread.id.in_(spam_thread_ids))
+        .options(selectinload(Thread.messages))
+        .order_by(Thread.last_message_at.desc().nullslast())
+    )
+    count_query = select(func.count(Thread.id)).where(Thread.id.in_(spam_thread_ids))
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    offset = (page - 1) * per_page
+    result = await db.execute(query.offset(offset).limit(per_page))
+    threads = result.scalars().unique().all()
+
+    return ThreadListResponse(
+        threads=[_to_thread_response(t) for t in threads],
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.get("/folder/{folder_id}", response_model=ThreadListResponse)
+async def get_folder(
+    folder_id: str,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=2000),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all threads that have a message in the given folder (any folder,
+    including custom ones). Scoped to the user's own accounts."""
+    folder_thread_ids = select(Message.thread_id).where(
+        Message.folder_id == folder_id,
+        Message.account_id.in_(
+            select(Account.id).where(Account.user_id == user.id)
+        ),
+    )
+
+    query = (
+        select(Thread)
+        .where(Thread.id.in_(folder_thread_ids))
+        .options(selectinload(Thread.messages))
+        .order_by(Thread.last_message_at.desc().nullslast())
+    )
+    count_query = select(func.count(Thread.id)).where(Thread.id.in_(folder_thread_ids))
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    offset = (page - 1) * per_page
+    result = await db.execute(query.offset(offset).limit(per_page))
+    threads = result.scalars().unique().all()
+
+    return ThreadListResponse(
+        threads=[_to_thread_response(t) for t in threads],
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
 # --- Single Thread ---
 
 @router.get("/threads/{thread_id}", response_model=ThreadDetailResponse)
@@ -484,6 +569,26 @@ async def restore_thread(
         add_labels=["INBOX"],
         remove_labels=["TRASH"],
     )
+    return {"status": "ok"}
+
+
+@router.patch("/threads/{thread_id}/spam")
+async def mark_thread_spam(
+    thread_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a thread as spam locally + move it to Junk on the mail server."""
+    thread = await _get_thread_or_404(db, user.id, thread_id)
+    result = await db.execute(
+        select(Message).where(Message.thread_id == thread.id)
+    )
+    messages = list(result.scalars().all())
+    for msg in messages:
+        msg.is_spam = True
+    await db.commit()
+
+    await _propagate_spam(db, user.id, messages)
     return {"status": "ok"}
 
 
@@ -1511,6 +1616,48 @@ async def compose_message(
     }
 
 # --- Helpers ---
+
+async def _propagate_spam(db: AsyncSession, user_id, messages: list[Message]):
+    """Propagate a spam action to each provider. Best-effort: local is_spam is
+    already committed; failures here are logged, not raised.
+
+    - Gmail: add the SPAM label, drop INBOX (reuses the label-change helper).
+    - Stalwart / IMAP: move the messages into the Junk mailbox.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Gmail accounts (the label helper ignores non-Gmail messages).
+    await _propagate_label_change(
+        db, user_id, messages,
+        add_labels=["SPAM"],
+        remove_labels=["INBOX"],
+    )
+
+    # IMAP accounts: move to Junk on the server.
+    by_account: dict = {}
+    for m in messages:
+        by_account.setdefault(m.account_id, []).append(m)
+    if not by_account:
+        return
+
+    account_result = await db.execute(
+        select(Account).where(
+            Account.id.in_(by_account.keys()),
+            Account.user_id == user_id,
+        )
+    )
+    from app.services.imap_sync import move_messages_to_folder
+    for account in account_result.scalars().all():
+        if account.provider == "gmail":
+            continue
+        try:
+            await move_messages_to_folder(account, by_account.get(account.id, []), "Junk")
+        except Exception as e:
+            logger.error(
+                "Failed to move spam to Junk on %s: %s", account.email_address, e,
+            )
+
 
 async def _propagate_label_change(
     db: AsyncSession,

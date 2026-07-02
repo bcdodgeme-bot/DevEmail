@@ -38,6 +38,7 @@ class Message(Base):
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     is_trashed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_spam: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False, index=True)
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
     read_receipt_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     read_receipt_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

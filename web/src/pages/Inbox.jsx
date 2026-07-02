@@ -23,6 +23,7 @@ import {
   selectCategoryCounts,
 } from '../store/categorySlice';
 import { showToast } from '../store/toastSlice';
+import { selectFolders } from '../store/foldersSlice';
 import ThreadList from '../components/inbox/ThreadList';
 import ThreadDetail from '../components/inbox/ThreadDetail';
 import EmptyState from '../components/inbox/EmptyState';
@@ -36,6 +37,10 @@ function viewFromPath(pathname) {
   if (pathname.startsWith('/sent')) return 'sent';
   if (pathname.startsWith('/drafts')) return 'drafts';
   if (pathname.startsWith('/trash')) return 'trash';
+  if (pathname.startsWith('/spam')) return 'spam';
+  // Custom folder view: the API view name IS "folder/<id>", so
+  // fetchThreads hits GET /messages/folder/<id> directly.
+  if (pathname.startsWith('/folder/')) return pathname.slice(1);
   return 'inbox';
 }
 
@@ -44,6 +49,7 @@ const VIEW_LABELS = {
   sent: 'Sent',
   drafts: 'Drafts',
   trash: 'Trash',
+  spam: 'Junk',
 };
 
 /** Normalize ?category= URL value to one of: 'all' | 'people' | 'bulk'. */
@@ -64,6 +70,7 @@ export default function Inbox() {
   const threadDetail = useSelector(selectThreadDetail);
   const detailStatus = useSelector(selectDetailStatus);
   const currentView = useSelector(selectView);
+  const folders = useSelector(selectFolders);
   const sliceCategory = useSelector(selectCategoryFilter);
   const counts = useSelector(selectCategoryCounts);
 
@@ -238,7 +245,11 @@ export default function Inbox() {
       {/* Left panel — thread list */}
       <div className={styles.listPanel}>
         <div className={styles.listHeader}>
-          <h2 className={styles.viewTitle}>{VIEW_LABELS[currentView]}</h2>
+          <h2 className={styles.viewTitle}>
+            {currentView.startsWith('folder/')
+              ? (folders.find((f) => f.id === currentView.slice(7))?.name || 'Folder')
+              : VIEW_LABELS[currentView]}
+          </h2>
           <div className={styles.listHeaderRight}>
             {threads.length > 0 && (
               <span className={styles.threadCount}>{threads.length}</span>

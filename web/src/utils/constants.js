@@ -6,6 +6,7 @@ export const ROUTES = {
   SENT: '/sent',
   DRAFTS: '/drafts',
   TRASH: '/trash',
+  SPAM: '/spam',
   CONTACTS: '/contacts',
   CALENDAR: '/calendar',
   SETTINGS: '/settings',

@@ -6,6 +6,7 @@ import contactsReducer from './contactsSlice';
 import calendarsReducer from './calendarsSlice';
 import toastReducer from './toastSlice';
 import categoryReducer from './categorySlice';
+import foldersReducer from './foldersSlice';
 
 export const store = configureStore({
   reducer: {
@@ -16,6 +17,7 @@ export const store = configureStore({
     calendars: calendarsReducer,
     toast: toastReducer,
     category: categoryReducer,
+    folders: foldersReducer,
   },
   devTools: import.meta.env.DEV,
 });

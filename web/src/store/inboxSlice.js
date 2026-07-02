@@ -106,6 +106,15 @@ export const restoreThread = createAsyncThunk(
   }
 );
 
+/** Mark a thread as spam — moves it to Junk locally + on the server */
+export const markThreadSpam = createAsyncThunk(
+  'inbox/markThreadSpam',
+  async (threadId) => {
+    await apiFetch(`/messages/threads/${threadId}/spam`, { method: 'PATCH' });
+    return { threadId };
+  }
+);
+
 /** Mark thread as unread */
 export const markUnread = createAsyncThunk(
   'inbox/markUnread',
@@ -161,7 +170,7 @@ const inboxSlice = createSlice({
     total: 0,
     page: 1,
     perPage: 50,
-    view: 'inbox',          // inbox | sent | drafts | trash
+    view: 'inbox',          // inbox | sent | drafts | trash | spam
     /* People/Bulk filter — null/'all' = no filter. URL `?category=` is
      * the source of truth; this slice mirrors it for consumers that
      * read from Redux. */
@@ -272,6 +281,11 @@ const inboxSlice = createSlice({
 
     /* ── trashThread — remove from list, advance to next ── */
     builder.addCase(trashThread.fulfilled, (state, action) => {
+      advanceAfterRemoval(state, action.payload.threadId);
+    });
+
+    /* ── markThreadSpam — remove from list, advance to next ── */
+    builder.addCase(markThreadSpam.fulfilled, (state, action) => {
       advanceAfterRemoval(state, action.payload.threadId);
     });
 

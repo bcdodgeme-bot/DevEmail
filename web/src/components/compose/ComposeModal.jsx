@@ -419,6 +419,56 @@ export default function ComposeModal({
     return sig?.body_html || sig?.body_text || '';
   };
 
+  /**
+   * Preserve pasted hyperlink URLs. A plain <textarea> only captures the
+   * *visible text* of a pasted rich link and silently drops the href — which
+   * is how a pasted Teams/meeting link disappears from the sent email. When the
+   * clipboard carries HTML, pull out any http(s) link whose URL isn't already
+   * present in the plain-text version and append it inline, so the URL survives
+   * into the body. Plain-text pastes are left untouched (default behavior).
+   */
+  const handlePaste = (e) => {
+    const html = e.clipboardData?.getData('text/html');
+    if (!html) return; // plain-text paste already keeps everything
+
+    const plain = e.clipboardData?.getData('text/plain') ?? '';
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    } catch {
+      return; // malformed HTML — fall back to default paste
+    }
+
+    const lostUrls = [];
+    doc.querySelectorAll('a[href]').forEach((a) => {
+      const href = (a.getAttribute('href') || '').trim();
+      if (!/^https?:\/\//i.test(href)) return;                 // only real web links
+      if (plain.includes(href) || lostUrls.includes(href)) return; // already visible / dup
+      lostUrls.push(href);
+    });
+
+    if (!lostUrls.length) return; // no URL would be lost — let the default paste run
+
+    e.preventDefault();
+    const insertText = plain
+      ? `${plain} ${lostUrls.join(' ')}`
+      : lostUrls.join(' ');
+
+    const el = bodyRef.current;
+    const start = el?.selectionStart ?? bodyText.length;
+    const end = el?.selectionEnd ?? bodyText.length;
+    setBodyText(bodyText.slice(0, start) + insertText + bodyText.slice(end));
+
+    // Restore the caret after React re-renders the controlled textarea.
+    const caret = start + insertText.length;
+    requestAnimationFrame(() => {
+      if (bodyRef.current) {
+        bodyRef.current.selectionStart = caret;
+        bodyRef.current.selectionEnd = caret;
+      }
+    });
+  };
+
   /** Build the draft/send payload */
   const buildPayload = (isDraft) => ({
     account_id: accountId,
@@ -735,6 +785,7 @@ export default function ComposeModal({
                 className={styles.bodyInput}
                 value={bodyText}
                 onChange={(e) => setBodyText(e.target.value)}
+                onPaste={handlePaste}
                 onBlur={handleBodyBlur}
                 placeholder="Write your message..."
               />
