@@ -67,6 +67,9 @@ export default function NavRail({ unreadCount = 0, onCompose, onSearch }) {
         <PenSquare size={20} />
       </button>
 
+      {/* Scrollable middle — grows to fill and scrolls when there are many
+          folders, so the pinned bottom actions stay reachable. */}
+      <div className={styles.scrollArea}>
       {/* Primary nav */}
       <div className={styles.section}>
         {NAV_ITEMS.map(({ path, icon: Icon, label, badge }) => (
@@ -127,12 +130,10 @@ export default function NavRail({ unreadCount = 0, onCompose, onSearch }) {
           </NavLink>
         ))}
       </div>
+      </div>{/* /scrollArea */}
 
-      {/* Spacer */}
-      <div className={styles.spacer} />
-
-      {/* Bottom actions */}
-      <div className={styles.section}>
+      {/* Bottom actions (pinned) */}
+      <div className={`${styles.section} ${styles.bottom}`}>
         <button
           className={styles.navItem}
           onClick={onSearch}

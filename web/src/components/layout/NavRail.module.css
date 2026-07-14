@@ -13,7 +13,35 @@
   padding: var(--space-3) 0;
   gap: var(--space-1);
   flex-shrink: 0;
+  overflow: hidden;
   z-index: var(--z-panel);
+}
+
+/* Scrollable middle region — grows to fill the rail and scrolls internally
+   when the folder list is long, keeping the logo/compose (above) and the
+   search/settings/avatar (below) pinned and always reachable. */
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Hide the scrollbar on this narrow icon rail — scroll via wheel/trackpad. */
+  scrollbar-width: none;
+}
+
+.scrollArea::-webkit-scrollbar {
+  display: none;
+}
+
+/* Pinned bottom actions — never shrink or scroll away. */
+.bottom {
+  flex-shrink: 0;
+  margin-top: var(--space-2);
 }
 
 /* === LOGO === */
